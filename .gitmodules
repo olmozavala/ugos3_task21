@@ -1,0 +1,3 @@
+[submodule "hycom"]
+	path = hycom-utils
+	url = git@github.com:HYCOM/HYCOM-utilities.git
