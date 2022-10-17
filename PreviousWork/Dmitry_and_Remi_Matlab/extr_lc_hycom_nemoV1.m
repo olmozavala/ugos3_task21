@@ -24,12 +24,13 @@
 % assimilating NEMO 1/100 free running fields
 % and NEMO LC contours
 %
-addpath /usr/people/ddmitry/codes/MyMatlab/;
-addpath /usr/people/ddmitry/codes/MyMatlab/hycom_utils;
-addpath /usr/people/ddmitry/codes/MyMatlab/colormaps;
+addpath ./MyMatlab/;
+addpath ./MyMatlab/hycom_utils;
+addpath ./MyMatlab/colormaps;
 
 close all
 clear
+clc
 
 f_mat = 1; % save mat; =2 - load saved and finish missing dates
 % Set flags for extracting experiments:
@@ -49,7 +50,7 @@ pthd1  = '/Net/gleam/abozec/HYCOM/TSIS/IASx0.03/hindcast_newtsis/gofs30_withpies
 pthd2  = '/Net/gleam/abozec/HYCOM/TSIS/IASx0.03/hindcast_extd_new/';  % extended PIES arrays
 pthd12 = '/Net/gleam/abozec/HYCOM/TSIS/IASx0.03/hindcast_ugos_obs/';  % all satellites included
 pthd3  = '/Net/gleam/dmitry/hycom/TSIS/IASx0.03/output/2011_GLfreerun/'; % free run
-pthtopo = '/home/ddmitry/codes/HYCOM_TSIS/';
+pthtopo = './topo/';
 pthmat  = '/Net/kronos/ddmitry/hycom/TSIS/datamat/';
 
 %fmatout = sprintf('%sLC_coord_osse_hycomV1.mat',pthmat);
@@ -123,6 +124,8 @@ end
 
 YPLT=[];
 cc=0;
+% Iterate over years and months (skips the first day of 2011 and days 
+% after 2012 day 182 not sure why
 for iy=2011:2012
   for dd=1:365
     if iy==2011 & dd==1; continue; end;
@@ -150,9 +153,9 @@ huge=1e20;
 
 %Read HYCOM topography:
 ftopo = sprintf('%sias_gridinfo.nc',pthtopo);
-HH  = -1*(nc_varget(ftopo,'mdepth'));
-LAT = nc_varget(ftopo,'mplat');
-LON = nc_varget(ftopo,'mplon');
+HH  = -1*(ncread(ftopo,'mdepth'));
+LAT = ncread(ftopo,'mplat');
+LON = ncread(ftopo,'mplon');
 [mh,nh]=size(HH);
 m=mh;
 n=nh;

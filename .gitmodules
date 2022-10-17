@@ -1,0 +1,9 @@
+[submodule "PreviousWork/PMiron/eoas_pyutils"]
+	path = PreviousWork/LC_Detection_PMiron/eoas_pyutils
+	url = git@github.com:olmozavala/eoas-pyutils.git
+[submodule "PreviousWork/LC_Detection_PMiron/hycom_utils"]
+	path = PreviousWork/LC_Detection_PMiron/hycom_utils
+	url = git@github.com:HYCOM/HYCOM-utilities.git
+[submodule "PreviousWork/REMI_TOEddies_4_Olmo/TOEddies/eoas_pyutils"]
+	path = PreviousWork/REMI_TOEddies_4_Olmo/TOEddies/eoas_pyutils
+	url = git@github.com:olmozavala/eoas-pyutils.git
