@@ -71,7 +71,11 @@ def flowmap(
         Dataset: contains the flowmap at the initial locations of the particles
     """
     mx, my = np.meshgrid(x, y, indexing="ij")
-    mt = np.full_like(mx, t0)
+    # time can be datetime or seconds from the origin_time
+    if type(t0) == datetime:
+        mt = np.full_like(mx, t0, dtype='datetime64[ms]')
+    else:
+        mt = np.full_like(mx, t0)
 
     # initialize the particles
     pset = ParticleSet.from_list(
@@ -168,8 +172,12 @@ def flowmap_lavd(
     Returns:
 
     """
-    mx, my = np.meshgrid(x, y, indexing="ij")   
-    mt = np.full_like(mx, t0)
+    mx, my = np.meshgrid(x, y, indexing="ij")
+    # time can be datetime or seconds from the origin_time
+    if type(t0) == datetime:
+        mt = np.full_like(mx, t0, dtype='datetime64[ms]')
+    else:
+        mt = np.full_like(mx, t0)
 
     # initialize the particles
     pset = ParticleSet.from_list(
