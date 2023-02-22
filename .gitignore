@@ -5,6 +5,7 @@ __pycache__/
 .idea
 PreviousWork/
 data/raw/
+data/extra/
 
 # C extensions
 *.so
