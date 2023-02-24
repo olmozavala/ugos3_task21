@@ -49,6 +49,7 @@ def extract_contours(
     lat: np.array,
     lavd: np.array,
     defTol: float = 0.075,
+    max_radius: float = 3.0,
     number_levels: int = 50,
 ) -> Tuple[np.array, np.array]:
     """
@@ -58,6 +59,8 @@ def extract_contours(
         lat: zonal coordinates of the grid in degrees [nx, ny]
         lavd: Lagrangian averaged vorticity deviation [nx, ny]
         defTol: control the deficiency of the loop closer to 0 means perfectly convex (~circular)
+        max_radius: Max radius of eddies control area where contours are extracted
+                    Note: assumed in the same units has the longitude and latitude.
         number_levels: contour levels between [0, peak_lavd_value]
 
     Returns:
@@ -67,12 +70,13 @@ def extract_contours(
     """
 
     # peaks and data structures
-    peaks_xy = peak_local_max(lavd, min_distance=20)
+    peaks_xy = peak_local_max(lavd, min_distance=20)  # indices
     peaks_value = lavd[peaks_xy[:, 0], peaks_xy[:, 1]]
     contours = np.empty_like(peaks_value, dtype="object")
 
     # coordinates are converted to indices by `find_contour`
     # this is used to bring back to degrees
+    dx, dy = np.mean(np.diff(lon)), np.mean(np.diff(lat))
     flon = interp1d(np.arange(0, len(lon)), lon)
     flat = interp1d(np.arange(0, len(lat)), lat)
 
@@ -81,25 +85,42 @@ def extract_contours(
         print(
             f"{j+1}/{len(peaks_xy)} (Found {n} {'eddies' if n>1 else 'eddy'})", end="\r"
         )
+        
+        # current peak and subdomain indices
         pxy = peaks_xy[j]
-        c_levels = np.linspace(0, peaks_value[j], number_levels)[1:]
+        i0, i1 = pxy[0] - np.ceil(max_radius/dx), pxy[0] + np.ceil(max_radius/dx)
+        j0, j1 = pxy[1] - np.ceil(max_radius/dy), pxy[1] + np.ceil(max_radius/dy)
+        
+        # make sure not over the domain
+        i0, i1 = max(0, int(i0)), min(len(lon)-1, int(i1))
+        j0, j1 = max(0, int(j0)), min(len(lat)-1, int(j1))
+        
+        # lavd around the center
+        sub_lavd = lavd[slice(i0,i1), slice(j0,j1)]
+        sub_pxy = pxy - np.array([i0, j0])
+        
+        c_levels = np.linspace(np.min(sub_lavd), peaks_value[j], number_levels)
 
-        # loop from the largest lowest value to the peaks
-        # if we found something we stop because we want to largest
-        # contour respecting the criteria
+        # loop from the lowest value to the peak value
+        #  - If we find a contour respecting the criteria 
+        #    we stop because we want to keep the largest
         for c_level in c_levels:
-            if contours[j] is None:
-                # TODO: calculate only on subregion for better perf                
-                # this changes the unit from (lon,lat) to (i,j) indices
-                cs = find_contours(lavd, c_level)  
+            if contours[j] is None:              
+                # this also returns (i,j) indices
+                cs = find_contours(sub_lavd, c_level)
                 for c in cs:
                     try:  # prevent error when ConvexHull fails on weirdly shaped contour
                         hull = ConvexHull(c)
-                        if peak_in_hull(pxy, hull):
+                        if peak_in_hull(sub_pxy, hull):
                             areaPoly = polygon_area(c)
                             if (
                                 abs(areaPoly - hull.volume) / areaPoly * 100 < defTol
-                            ):  # in 2D hull.volume returns area (!)
+                            ):  # in 2D hull.volume returns the area (!)
+                                
+                                # translate back to the full domain
+                                c[:,0] += i0
+                                c[:,1] += j0
+                                
                                 contours[j] = np.column_stack((flon(c[:, 0]), flat(c[:, 1])))
                                 n += 1
                                 break
