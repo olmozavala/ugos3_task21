@@ -1,6 +1,6 @@
 import numba as nb
 import numpy as np
-
+from typing import Tuple
 
 @nb.njit
 def haversine(
@@ -29,7 +29,7 @@ def haversine(
 @nb.njit
 def grid_to_m(
     lon: np.ndarray, lat: np.ndarray, lon0: float, lat0: float
-) -> tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Transform a rectilinear grids defined by two 1D vector for longitude and latitude
     to meters
