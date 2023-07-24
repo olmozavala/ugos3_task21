@@ -7,3 +7,6 @@
 [submodule "PreviousWork/REMI_TOEddies_4_Olmo/TOEddies/eoas_pyutils"]
 	path = PreviousWork/REMI_TOEddies_4_Olmo/TOEddies/eoas_pyutils
 	url = git@github.com:olmozavala/eoas-pyutils.git
+[submodule "DA_Chlora/eoas_pyutils"]
+	path = DA_Chlora/eoas_pyutils
+	url = git@github.com:olmozavala/eoas-pyutils.git
