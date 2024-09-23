@@ -7,8 +7,11 @@ import model.metric as module_metric
 import model.model as module_arch
 from parse_config import ConfigParser
 from os.path import join
+import os
+import json
 import matplotlib.pyplot as plt
 from data_loader.loader_utils import plot_predictions
+import xarray as xr
 
 def main(config):
     logger = config.get_logger('test')
@@ -19,14 +22,25 @@ def main(config):
         batch_size=config['data_loader']['args']['batch_size'],
         shuffle=False,
         validation_split=0.0,
-        training=False,
+        # training=False,
+        training=True,
         num_workers=config['data_loader']['args']['num_workers'],
         previous_days=config['data_loader']['args']['previous_days']
     )
 
+    # Read config.json from the weights_file directory
+    weights_dir = config['tester']['weights_dir']
+    with open(join(weights_dir, 'config.json'), 'r') as f:
+        training_config = json.load(f)
+
+    # Model name
+    model_name = training_config['name']
+
     # Setup output directory
-    output_dir = config['tester']['output_dir']
-    weights_file = join(config['tester']['weights_file'], 'model_best.pth')
+    output_dir = join(config['tester']['output_dir'], model_name)
+    os.makedirs(output_dir, exist_ok=True)
+
+    weights_file = join(weights_dir, 'model_best.pth')
 
     # build model architecture
     model = config.init_obj('arch', module_arch)
@@ -40,8 +54,9 @@ def main(config):
     logger.info('Loading checkpoint: {} ...'.format(weights_file))
     checkpoint = torch.load(weights_file)
     state_dict = checkpoint['state_dict']
-    if config['n_gpu'] > 1:
-        model = torch.nn.DataParallel(model)
+    # if config['n_gpu'] > 1:
+        # model = torch.nn.DataParallel(model)
+    model = torch.compile(model)
     model.load_state_dict(state_dict)
 
     # prepare model for testing
@@ -51,6 +66,13 @@ def main(config):
 
     total_loss = 0.0
     total_metrics = torch.zeros(len(metric_fns))
+
+    # Read the lats and lons from 
+    lats = data_loader.dataset.lats
+    lons = data_loader.dataset.lons
+
+    #  Set the precision of the model
+    torch.set_float32_matmul_precision('medium')
 
     with torch.no_grad():
         for i, (data, target) in enumerate(tqdm(data_loader)):
@@ -75,6 +97,16 @@ def main(config):
             total_loss += loss.item() * batch_size
             for i, metric in enumerate(metric_fns):
                 total_metrics[i] += metric(output, target) * batch_size
+
+            # Save the output to a netcdf file
+            output_file = join(output_dir, f"pred_batch_{i}.nc")
+            xr.Dataset({
+                'output': (['latitude', 'longitude'], output_cpu),
+                'target': (['latitude', 'longitude'], target_cpu)
+            }, coords={
+                'latitude': lats,
+                'longitude': lons
+            }).to_netcdf(output_file)
 
             if i > 3:
                 break

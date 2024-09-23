@@ -1,5 +1,5 @@
 {
-    "name": "UNet_wupsample",
+    "name": "UNet_with_upsample_optimization_off_fulldataset",
     "n_gpu": 4,
 
     "arch": {
@@ -14,7 +14,7 @@
             "cnn_per_level": 2,
             "batch_norm": true,
             "dropout_rate": 0,
-            "hidden_activation": "leaky_relu",
+            "hidden_activation": "relu",
             "output_activation": "linear"
         }
     },
@@ -59,7 +59,8 @@
         "tensorboard": true
     },
     "tester": {
-        "weights_file": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/Basic_UNet/0919_214126",
+        "_weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/Basic_UNet/0919_214126",
+        "weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/UNet_with_upsample/0923_133250prevdays_7_activation_leaky_relu",
         "output_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing"
     }
 }

@@ -39,12 +39,24 @@ class Trainer(BaseTrainer):
         :param epoch: Integer, current training epoch.
         :return: A log that contains average loss and metric in this epoch.
         """
+
+        # # Just to save the graph in tensorboard
+        # if self.device.type == 'cuda' and torch.cuda.current_device() == 0:
+        #     print("Saving the graph in tensorboard")
+        #     for batch_idx, (data, target) in enumerate(self.data_loader):
+        #         dummy_input = torch.randn(1, *data.shape[1:]).to(self.device)
+        #         self.writer.add_graph(self.model, dummy_input)
+        #         break
+        #     print("Graph saved in tensorboard")
+
         self.model.train()
         self.train_metrics.reset()
         for batch_idx, (data, target) in enumerate(self.data_loader):
             data, target = data.to(self.device), target.to(self.device)
 
             self.optimizer.zero_grad()
+            # I hardcoded the device type to cuda because I was getting an error when it tried to run on the CPU
+
             output = self.model(data)
             loss = self.criterion(output, target)
             loss.backward()
@@ -61,9 +73,6 @@ class Trainer(BaseTrainer):
                     self._progress(batch_idx),
                     loss.item()))
                 # self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
-
-            # if batch_idx == 0 and epoch == 1:
-                # self.writer.add_graph(self.model, data)
 
             if batch_idx == self.len_epoch:
                 break
@@ -100,8 +109,8 @@ class Trainer(BaseTrainer):
                 # self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
 
         # add histogram of model parameters to the tensorboard
-        for name, p in self.model.named_parameters():
-            self.writer.add_histogram(name, p, bins='auto')
+        # for name, p in self.model.named_parameters():
+            # self.writer.add_histogram(name, p, bins='auto')
         return self.valid_metrics.result()
 
     def _progress(self, batch_idx):

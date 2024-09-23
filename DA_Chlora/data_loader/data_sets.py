@@ -9,20 +9,32 @@ import torch
 from os.path import join
 from data_loader.loader_utils import *
 import matplotlib.pyplot as plt
+import re
+import glob
+
 # Function to apply StandardScaler to an array and persist the scaler
-def scale_data_dataset(data, scalers, name):
+def scale_data_dataset(data, scalers, name, training=True):
     # Flatten the data to 2D, where each row is a sample
     reshaped_data = data.data.flatten()
-    min = np.nanmin(reshaped_data).compute()
-    max = np.nanmax(reshaped_data).compute()
-    mean = np.nanmean(reshaped_data).compute()
-    std = np.nanstd(reshaped_data).compute()
+    if training:
+        min = np.nanmin(reshaped_data).compute()
+        max = np.nanmax(reshaped_data).compute()
+        mean = np.nanmean(reshaped_data).compute()
+        std = np.nanstd(reshaped_data).compute()
+    else:
+        print(f"Loading {name} scalers...")
+        min = scalers[name]['min']
+        max = scalers[name]['max']
+        mean = scalers[name]['mean']
+        std = scalers[name]['std']
+
     print(f"For {name}: Min: {min}, Max: {max}, Mean: {mean}, Std: {std}")
 
     scaled_data = (reshaped_data - mean) / std
     
     # Save the scaler for later use
-    scalers[name] = {'mean': mean, 'std': std}
+    scalers[name] = {'mean': mean, 'std': std, 'min': min, 'max': max}
+
     # Reshape the scaled data back to its original shape
     scaled_data = scaled_data.reshape(data.shape)
     # Any nan values in the original data should be nan in the scaled data
@@ -30,6 +42,9 @@ def scale_data_dataset(data, scalers, name):
     return scaled_data, scalers
 
 class SimSatelliteDataset:
+    # Total 1758*2 = 3516 training examples
+    # 10% validation split -> 351 examples
+    # 90% training split -> 3165 examples
     def __init__(self, data_dir, transform=None, previous_days=1, plot_data=False, training=True):
         self.data_dir = data_dir
         self.transform = transform
@@ -43,9 +58,11 @@ class SimSatelliteDataset:
         input_normalized_vars = [f"{var}_normalized" for var in input_vars]
         output_var = [f"{var}_normalized" for var in output_vars][0]
 
+        scalers_file = "scalers.pkl"
         if training:
-            pkl_file = "training_full.pkl"
-        # pkl_file = "training.pkl"
+            pkl_file = "training.pkl"
+            # pkl_file = "training_full_bk.pkl"
+            # pkl_file = "training_small.pkl"
         else:
             pkl_file = "validation.pkl"
 
@@ -54,8 +71,22 @@ class SimSatelliteDataset:
         if not os.path.exists(training_pkl_path):
             print(f"{pkl_file} file does not exist. Reading netcdfs...")
             # Reads all the netcdfs in the data_dir
-            all_data = xr.open_mfdataset(join(data_dir, "*.nc"), engine="netcdf4", concat_dim="ex_num", combine="nested")
+            all_files = glob.glob(join(data_dir, "*.nc"))
+            pattern = re.compile(r".*_(\d+)\.nc$")
+            if training:
+                # In this case we should read 0 to 1582 and 1759 to 3340
+                filtered_files = [f for f in all_files if pattern.match(f) and (
+                    0 <= int(pattern.match(f).group(1)) <= 1582 or
+                    1759 <= int(pattern.match(f).group(1)) <= 3340
+                )]
+            else:
+                filtered_files = [f for f in all_files if pattern.match(f) and (
+                    1583 <= int(pattern.match(f).group(1)) <= 1758 or
+                    3340 <= int(pattern.match(f).group(1)) <= 3515
+                )]
+
             # all_data = xr.open_mfdataset(join(data_dir, "*[0-9][0-9][0].nc"), engine="netcdf4", concat_dim="ex_num", combine="nested")
+            all_data = xr.open_mfdataset(filtered_files, engine="netcdf4", concat_dim="ex_num", combine="nested")
             
             # Rechunk the data so that ex_num is in a single chunk
             all_data = all_data.chunk({'ex_num': 1})
@@ -63,32 +94,42 @@ class SimSatelliteDataset:
             lats = all_data.latitude
             lons = all_data.longitude
 
+            self.lats = lats
+            self.lons = lons
+
             # Apply log to the chlorophyll variable
             all_data['chlora'] = np.log(all_data['chlora'])
             # Make nans all the values that are 0s in ssh_track
             all_data['ssh_track'].data = np.where(all_data['ssh_track'].data==0, np.nan, all_data['ssh_track'].data)
 
+            # If we are not training read the scalers from the file
+            if not training: 
+                print(f"Reading {scalers_file} file...")
+                with open(join(data_dir, scalers_file), "rb") as f:
+                    self.scalers = pickle.load(f)
+
             # Apply the scaling function to each variable
             for var_name in all_var_names:
                 print(f"Scaling {var_name}...")
-                norm_data, self.scalers = scale_data_dataset(all_data[var_name], self.scalers, var_name)
+                norm_data, self.scalers = scale_data_dataset(all_data[var_name], self.scalers, var_name, training=training)
                 all_data[f'{var_name}_normalized'] = xr.DataArray(
                     norm_data,
                     dims=all_data[var_name].dims,
                     coords=all_data[var_name].coords
                 )
 
-            # Saving the scalers
-            with open(join(data_dir, "scalers.pkl"), "wb") as f:
-                print(f"Saving scalers to {join(data_dir, 'scalers.pkl')}...")
-                pickle.dump(self.scalers, f)
+            if training:
+                # Saving the scalers
+                with open(join(data_dir, scalers_file), "wb") as f:
+                    print(f"Saving scalers to {join(data_dir, scalers_file)}...")
+                    pickle.dump(self.scalers, f)
 
             if self.plot_data:
                 print("Plotting some data...")
                 for i in range(10):
                     idx = np.random.randint(0, len(all_data.ex_num))
                     plot_dataset_data(idx, all_data, lats, lons)
-# 
+             
             self.X = np.stack([all_data[var_name].compute().data for var_name in input_normalized_vars], axis=0)
             self.Y = all_data[output_var].compute().data
             # Flip the first and second dimensions in X  
@@ -96,10 +137,11 @@ class SimSatelliteDataset:
 
             # Saving the training data
             with open(training_pkl_path, "wb") as f:
-                pickle.dump((self.X, self.Y), f)
+                pickle.dump((self.X, self.Y, self.lats, self.lons), f)
         else:
             print(f"Reading {pkl_file} file...")
             with open(training_pkl_path, "rb") as f:
+                # self.X, self.Y, self.lats, self.lons = pickle.load(f)
                 self.X, self.Y = pickle.load(f)
         
         # Make a mask of the gulf of guinea
@@ -171,11 +213,14 @@ class SimSatelliteDataset:
 
 if __name__ == "__main__":
 # Main function to test the dataset
-    data_dir = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/"
+    data_dir = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/Short_SWOT"
     batch_size = 2
+    training = False
+    plot_data = False
+    previous_days = 7
 
     # Create an instance of the SimSatelliteDataset
-    dataset = SimSatelliteDataset(data_dir, previous_days=4, transform=None, plot_data=True)
+    dataset = SimSatelliteDataset(data_dir, previous_days=previous_days, transform=None, plot_data=plot_data, training=training)
 
     # Create a data loader for the dataset
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)

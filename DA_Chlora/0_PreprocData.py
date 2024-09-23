@@ -43,8 +43,8 @@ imgs_output_folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs/
 # %% ================= Reading model data ==========================
 print("Reading model data...")
 start_date = date(2016, 8, 1)
-# end_date = date(2021, 7, 1)
-end_date = date(2016, 9, 10)
+end_date = date(2021, 7, 1)
+# end_date = date(2016, 9, 10)
 model_data, lats, lons = get_biorun_cicese_nemo_by_date_range(start_date, end_date)
 tot_ex_model = model_data.time.shape[0]
 print("Total number of model examples: ", tot_ex_model)
@@ -77,7 +77,7 @@ print("Done!")
 # %% ================= Getting SWOT masks ==========================
 # Read all the files
 print("Generating SWOT masks...")
-data = xr.open_mfdataset(swot_path + "*.nc", combine="by_coords")
+data = xr.open_mfdataset(swot_path + "swot_masks_2016_2024.nc", combine="by_coords")
 swot_all_masks = data.mask
 tot_ex_swot = swot_all_masks.date.shape[0]
 print("Total number of SWOT examples: ", tot_ex_swot)
@@ -350,13 +350,13 @@ def generate_example(i, tot_ex_sst, tot_ex_chlora, tot_ex_model, tot_ex_ssh, tot
         'longitude': lons
     })
     dataset_time = time.time() - start_time
-    print(f"Time to make dataset: {dataset_time:.4f} seconds")
+    print(f"Time to make dataset: {dataset_time:.2f} seconds")
     
     print(f"Saving netcdf for example {i}  ...")
     start_time = time.time()
     cur_example_ds.to_netcdf(join(output_folder, f"example_{i:03}.nc"))
     save_time = time.time() - start_time
-    print(f"Time to save netcdf: {save_time:.4f} seconds")
+    print(f"Time to save netcdf: {save_time:.2f} seconds")
 
 print("Generating synthetic examples...")
 
