@@ -12,8 +12,8 @@ from io_utils.coaps_io_data import *
 
 from shapely.geometry import LineString
 from matplotlib.colors import LogNorm
-import xarray as xr
-import cmocean.cm as ccm
+git submodule update --init --recursive
+mocean.cm as ccm
 import os
 from os.path import join
 from datetime import datetime, date, timedelta
