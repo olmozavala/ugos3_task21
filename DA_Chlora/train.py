@@ -54,7 +54,7 @@ if len(device_ids) > 1:
     model = torch.nn.DataParallel(model, device_ids=device_ids)
 
 # OPTIMIZATION
-# model = torch.compile(model)
+model = torch.compile(model)
 
 # get function handles of loss and metrics
 criterion = getattr(module_loss, config['loss'])
@@ -66,7 +66,7 @@ optimizer = config.init_obj('optimizer', torch.optim, trainable_params)
 lr_scheduler = config.init_obj('lr_scheduler', torch.optim.lr_scheduler, optimizer)
 
 # OPTIMIZATION
-# torch.set_float32_matmul_precision('medium')
+torch.set_float32_matmul_precision('medium')
 
 trainer = Trainer(model, criterion, metrics, optimizer,
                     config=config,

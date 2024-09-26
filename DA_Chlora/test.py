@@ -6,6 +6,7 @@ import model.loss as module_loss
 import model.metric as module_metric
 import model.model as module_arch
 from parse_config import ConfigParser
+from utils import prepare_device
 from os.path import join
 import os
 import json
@@ -22,8 +23,8 @@ def main(config):
         batch_size=config['data_loader']['args']['batch_size'],
         shuffle=False,
         validation_split=0.0,
-        # training=False,
-        training=True,
+        training=False,
+        # training=True,
         num_workers=config['data_loader']['args']['num_workers'],
         previous_days=config['data_loader']['args']['previous_days']
     )
@@ -54,15 +55,19 @@ def main(config):
     logger.info('Loading checkpoint: {} ...'.format(weights_file))
     checkpoint = torch.load(weights_file)
     state_dict = checkpoint['state_dict']
-    # if config['n_gpu'] > 1:
-        # model = torch.nn.DataParallel(model)
+
+    device, device_ids = prepare_device(config['n_gpu'])
+    model = model.to(device)
+
+    if len(device_ids) > 1:
+        model = torch.nn.DataParallel(model)
+
     model = torch.compile(model)
     model.load_state_dict(state_dict)
-
-    # prepare model for testing
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
     model.eval()
+
+    # OPTIMIZATION
+    torch.set_float32_matmul_precision('medium')
 
     total_loss = 0.0
     total_metrics = torch.zeros(len(metric_fns))
@@ -72,10 +77,16 @@ def main(config):
     lons = data_loader.dataset.lons
 
     #  Set the precision of the model
-    torch.set_float32_matmul_precision('medium')
+    # torch.set_float32_matmul_precision('medium')
 
+    validation_loss = []
     with torch.no_grad():
         for i, (data, target) in enumerate(tqdm(data_loader)):
+            if i == 0:
+                # Crop the lats and lons to the shape of the data
+                lats = lats[:data.shape[2]]
+                lons = lons[:data.shape[3]]
+
             print(f"Batch {i} of {len(data_loader)}")
             data, target = data.to(device), target.to(device)
             output = model(data)
@@ -87,29 +98,37 @@ def main(config):
             data_cpu = data.cpu().numpy()
             target_cpu = target.cpu().numpy()
             output_cpu = output.cpu().numpy()
-            for j in range(output.shape[0]):
-                file_name = join(output_dir, f"pred_batch_{i}_sample_{j}.jpg")
-                plot_predictions(data_cpu[j, :, :, :], target_cpu[j, :, :], output_cpu[j, :, :], file_name)
+            if i % 10 == 0:
+                # for j in range(output.shape[0]):
+                for j in range(min(output.shape[0], 5)):
+                    file_name = join(output_dir, f"pred_batch_{i}_sample_{j}.jpg")
+                    plot_predictions(data_cpu[j, :, :, :], target_cpu[j, :, :], output_cpu[j, :, :], file_name)
 
             # computing loss, metrics on test set
             loss = loss_fn(output, target)
             batch_size = data.shape[0]
             total_loss += loss.item() * batch_size
-            for i, metric in enumerate(metric_fns):
-                total_metrics[i] += metric(output, target) * batch_size
+            for j, metric in enumerate(metric_fns):
+                total_metrics[j] += metric(output, target) * batch_size
+
+            validation_loss.append(loss.item())
 
             # Save the output to a netcdf file
-            output_file = join(output_dir, f"pred_batch_{i}.nc")
-            xr.Dataset({
-                'output': (['latitude', 'longitude'], output_cpu),
-                'target': (['latitude', 'longitude'], target_cpu)
-            }, coords={
-                'latitude': lats,
-                'longitude': lons
-            }).to_netcdf(output_file)
+            for j in range(output.shape[0]):
+                output_file = join(output_dir, f"pred_batch_{i}_sample_{j}.nc")
+                xr.Dataset({
+                    'output': (['latitude', 'longitude'], output_cpu[j, :, :]),
+                    'target': (['latitude', 'longitude'], target_cpu[j, :, :])
+                }, coords={
+                    'latitude': lats,
+                    'longitude': lons
+                }).to_netcdf(output_file)
 
-            if i > 3:
-                break
+    # Save the loss
+    loss_file = join(output_dir, "loss.csv")
+    with open(loss_file, "w") as f:
+        for loss in validation_loss:
+            f.write(f"{loss}\n")
 
     n_samples = len(data_loader.sampler)
     log = {'loss': total_loss / n_samples}

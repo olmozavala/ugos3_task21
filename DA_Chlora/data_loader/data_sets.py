@@ -61,7 +61,7 @@ class SimSatelliteDataset:
         scalers_file = "scalers.pkl"
         if training:
             pkl_file = "training.pkl"
-            # pkl_file = "training_full_bk.pkl"
+            # pkl_file = "training_full.pkl"
             # pkl_file = "training_small.pkl"
         else:
             pkl_file = "validation.pkl"
@@ -75,17 +75,19 @@ class SimSatelliteDataset:
             pattern = re.compile(r".*_(\d+)\.nc$")
             if training:
                 # In this case we should read 0 to 1582 and 1759 to 3340
-                filtered_files = [f for f in all_files if pattern.match(f) and (
-                    0 <= int(pattern.match(f).group(1)) <= 1582 or
-                    1759 <= int(pattern.match(f).group(1)) <= 3340
-                )]
+                if pkl_file == "training.pkl":
+                    filtered_files = [f for f in all_files if pattern.match(f) and (
+                        0 <= int(pattern.match(f).group(1)) <= 1582 or
+                    1759 <= int(pattern.match(f).group(1)) <= 3340)]
+                elif pkl_file == "training_full.pkl":
+                    # Use all the files
+                    filtered_files = all_files
             else:
                 filtered_files = [f for f in all_files if pattern.match(f) and (
                     1583 <= int(pattern.match(f).group(1)) <= 1758 or
                     3340 <= int(pattern.match(f).group(1)) <= 3515
                 )]
 
-            # all_data = xr.open_mfdataset(join(data_dir, "*[0-9][0-9][0].nc"), engine="netcdf4", concat_dim="ex_num", combine="nested")
             all_data = xr.open_mfdataset(filtered_files, engine="netcdf4", concat_dim="ex_num", combine="nested")
             
             # Rechunk the data so that ex_num is in a single chunk
@@ -123,6 +125,7 @@ class SimSatelliteDataset:
                 with open(join(data_dir, scalers_file), "wb") as f:
                     print(f"Saving scalers to {join(data_dir, scalers_file)}...")
                     pickle.dump(self.scalers, f)
+                    print("Scalers saved!")
 
             if self.plot_data:
                 print("Plotting some data...")
@@ -130,19 +133,21 @@ class SimSatelliteDataset:
                     idx = np.random.randint(0, len(all_data.ex_num))
                     plot_dataset_data(idx, all_data, lats, lons)
              
+            print("Stack the dat and assign to X and Y")
             self.X = np.stack([all_data[var_name].compute().data for var_name in input_normalized_vars], axis=0)
             self.Y = all_data[output_var].compute().data
             # Flip the first and second dimensions in X  
             self.X = np.transpose(self.X, (1, 0, 2, 3))
 
+            print("Saving the training data...")
             # Saving the training data
             with open(training_pkl_path, "wb") as f:
                 pickle.dump((self.X, self.Y, self.lats, self.lons), f)
+            print("Training data saved!")
         else:
             print(f"Reading {pkl_file} file...")
             with open(training_pkl_path, "rb") as f:
-                # self.X, self.Y, self.lats, self.lons = pickle.load(f)
-                self.X, self.Y = pickle.load(f)
+                self.X, self.Y, self.lats, self.lons = pickle.load(f)
         
         # Make a mask of the gulf of guinea
         self.gulf_mask = np.zeros_like(self.Y[0,:,:])
@@ -213,9 +218,9 @@ class SimSatelliteDataset:
 
 if __name__ == "__main__":
 # Main function to test the dataset
-    data_dir = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/Short_SWOT"
-    batch_size = 2
-    training = False
+    data_dir = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"
+    batch_size = 1
+    training = True
     plot_data = False
     previous_days = 7
 
