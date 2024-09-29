@@ -45,12 +45,13 @@ class SimSatelliteDataset:
     # Total 1758*2 = 3516 training examples
     # 10% validation split -> 351 examples
     # 90% training split -> 3165 examples
-    def __init__(self, data_dir, transform=None, previous_days=1, plot_data=False, training=True):
+    def __init__(self, data_dir, transform=None, previous_days=1, plot_data=False, training=True, dataset_type="regular"):
         self.data_dir = data_dir
         self.transform = transform
         self.scalers = {}  # To store scalers for each variable
         self.previous_days = previous_days
         self.plot_data = plot_data
+        self.dataset_type = dataset_type
         # Input variables
         input_vars = ["sst", "chlora", "ssh_track", "swot"]
         output_vars = ["ssh"]
@@ -87,6 +88,9 @@ class SimSatelliteDataset:
                     1583 <= int(pattern.match(f).group(1)) <= 1758 or
                     3340 <= int(pattern.match(f).group(1)) <= 3515
                 )]
+
+            # Sort the files
+            filtered_files.sort()
 
             all_data = xr.open_mfdataset(filtered_files, engine="netcdf4", concat_dim="ex_num", combine="nested")
             
@@ -133,7 +137,7 @@ class SimSatelliteDataset:
                     idx = np.random.randint(0, len(all_data.ex_num))
                     plot_dataset_data(idx, all_data, lats, lons)
              
-            print("Stack the dat and assign to X and Y")
+            print("Stack the data and assign to X and Y")
             self.X = np.stack([all_data[var_name].compute().data for var_name in input_normalized_vars], axis=0)
             self.Y = all_data[output_var].compute().data
             # Flip the first and second dimensions in X  
@@ -167,13 +171,21 @@ class SimSatelliteDataset:
         self.X = self.X[:, :, :new_height, :new_width]
         self.Y = self.Y[:, :new_height, :new_width]
         self.gulf_mask = self.gulf_mask[:new_height, :new_width]
-        self.tot_inputs = self.X.shape[1] * self.previous_days + 1
+        
+        if dataset_type == "regular":
+            # +1 because of the Gulf Mask
+            self.tot_inputs = self.X.shape[1] * self.previous_days + 1
+        elif dataset_type == "extended":
+            # +3 because of the Gulf Mask and the two previous states with some noise
+            self.tot_inputs = self.X.shape[1] * self.previous_days + 3
 
         # Make the mask a float32 tensor
         self.gulf_mask = torch.tensor(self.gulf_mask, dtype=torch.float32)
 
         # Get the length of the dataset
         self.length = self.Y.shape[0]
+        if self.dataset_type == "extended":
+            self.length = self.length - 2
 
         # # Verify the dimensions
         print(f"X shape: {self.X.shape}")
@@ -189,20 +201,32 @@ class SimSatelliteDataset:
             index = self.previous_days + 1
 
         X_with_mask = np.zeros((self.tot_inputs, self.X.shape[2], self.X.shape[3]), dtype=np.float32)
+
         # The +1 is because the last element of X_with_mask is the Gulf Mask
         size_per_day = self.X.shape[1]
         for i in range(self.previous_days):
             # Append the previous days to the X_with_mask
             start_index = i * size_per_day
             end_idx = (i * size_per_day) + size_per_day
-            # print(f"start_index: {start_index}, end_idx: {end_idx}. Index: {index - i}")
-            X_with_mask[start_index : end_idx, :, :] = self.X[index - i, :, :, :]
+            # print(f"start_index: {start_index}, end_idx: {end_idx}. Index: {index - self.previous_days + i + 1}. Original index: {index}")
+            X_with_mask[start_index : end_idx, :, :] = self.X[index - self.previous_days + i + 1, :, :, :]
+        
+        # Add the Gulf Mask as the last channel
         X_with_mask[-1, :, :] = self.gulf_mask
+
+        if self.dataset_type == "extended":
+            noise_level = 0.5
+            noise = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level
+            # Add the previous two states with some noise at locations -2 and -3
+            X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise
+            X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise
 
         # Only for testing purposes plot the input data
         if self.plot_data:
             input_names = ["sst", "chlora", "ssh_track", "swot"]
-            plot_single_batch_element(X_with_mask, input_names, self.previous_days, f"/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/{index}.jpg")
+            plot_single_batch_element(X_with_mask, self.Y[index], input_names, self.previous_days, 
+                                      f"/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/batch_example_{index}.jpg",
+                                      self.lats, self.lons, dataset_type=self.dataset_type)
 
         return X_with_mask, self.Y[index]
 
@@ -220,18 +244,24 @@ if __name__ == "__main__":
 # Main function to test the dataset
     data_dir = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"
     batch_size = 1
-    training = True
-    plot_data = False
+    training = False
+    plot_data = True
     previous_days = 7
+    dataset_type = "regular"
+    shuffle = True
 
     # Create an instance of the SimSatelliteDataset
-    dataset = SimSatelliteDataset(data_dir, previous_days=previous_days, transform=None, plot_data=plot_data, training=training)
+    dataset = SimSatelliteDataset(data_dir, previous_days=previous_days, transform=None,
+                                   plot_data=plot_data, training=training, dataset_type=dataset_type)
 
     # Create a data loader for the dataset
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 #
     # Iterate over the data loader
     for batch_idx, (x, y) in enumerate(data_loader):
         # Print the batch index and the batch size
         print(f"Batch {batch_idx}: x.shape = {x.shape}, y.shape = {y.shape}")
-        exit()
+        if batch_idx > 0:
+            break
+
+    print("Done!")

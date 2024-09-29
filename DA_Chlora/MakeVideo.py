@@ -1,19 +1,22 @@
+# %%
 import cv2
 import os
-
+from os.path import join
 # Path to the directory containing the images
-image_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs'
-starts_with = 'ssh'  # It can be 'Model' or 'Satellite' or DCHL_Comparison
+# images_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs'
+images_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/results/DUACS'
+output_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs/videos'
+starts_with = 'duacs_interpolation'  # It can be 'Model' or 'Satellite' or DCHL_Comparison
 
-video_name = f'{starts_with}.mp4'
-fps = .5  # Set the frame rate
+video_name = join(output_folder, f'{starts_with}.mp4')
+fps = .8  # Set the frame rate
 
 # Get the list of all image files in the directory
-images = sorted([f for f in os.listdir(image_folder) if f.startswith(starts_with) and f.endswith('.png')])
+images = sorted([f for f in os.listdir(images_folder) if f.startswith(starts_with) and f.endswith('.png')])
 print(f'Images to process: {images}')
 
 # Read the first image to get the width and height of the video
-frame = cv2.imread(os.path.join(image_folder, images[0]))
+frame = cv2.imread(os.path.join(images_folder, images[0]))
 height, width, layers = frame.shape
 
 # Define the codec and create VideoWriter object
@@ -22,8 +25,9 @@ fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # or use *'X264' if you have it availa
 video = cv2.VideoWriter(video_name, fourcc, fps, (width, height))
 
 # Iterate through all images and add them to the video
-for image in images:
-    img = cv2.imread(os.path.join(image_folder, image))
+max_images = 10
+for i, image in enumerate(images):
+    img = cv2.imread(os.path.join(images_folder, image))
 
     # Print the shape of the current image (to verify size)
     if img is not None:
@@ -39,8 +43,13 @@ for image in images:
     else:
         print(f"Failed to read image: {image}")
 
+    if i == max_images:
+        break
+
 # Release the video writer object
 video.release()
 cv2.destroyAllWindows()
 
 print(f"Video saved as {video_name}")
+
+# %%

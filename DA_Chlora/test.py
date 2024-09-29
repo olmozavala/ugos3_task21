@@ -1,5 +1,6 @@
 import argparse
 import torch
+import pickle
 from tqdm import tqdm
 import data_loader.data_loaders as module_data
 import model.loss as module_loss
@@ -17,6 +18,10 @@ import xarray as xr
 def main(config):
     logger = config.get_logger('test')
 
+    batch_size = config['data_loader']['args']['batch_size']
+    data_dir = config['data_loader']['args']['data_dir']
+    dataset_type = config['data_loader']['args']['dataset_type']
+
     # setup data_loader instances
     data_loader = getattr(module_data, config['data_loader']['type'])(
         config['data_loader']['args']['data_dir'],
@@ -26,8 +31,17 @@ def main(config):
         training=False,
         # training=True,
         num_workers=config['data_loader']['args']['num_workers'],
-        previous_days=config['data_loader']['args']['previous_days']
+        previous_days=config['data_loader']['args']['previous_days'],
+        dataset_type=dataset_type
     )
+
+    # Read the scalers from the data_dir
+    with open(join(data_dir, 'scalers.pkl'), 'rb') as f:
+        scalers = pickle.load(f)
+
+    mean_ssh = scalers["ssh"]["mean"]
+    std_ssh = scalers["ssh"]["std"]
+
 
     # Read config.json from the weights_file directory
     weights_dir = config['tester']['weights_dir']
@@ -76,9 +90,6 @@ def main(config):
     lats = data_loader.dataset.lats
     lons = data_loader.dataset.lons
 
-    #  Set the precision of the model
-    # torch.set_float32_matmul_precision('medium')
-
     validation_loss = []
     with torch.no_grad():
         for i, (data, target) in enumerate(tqdm(data_loader)):
@@ -91,6 +102,11 @@ def main(config):
             data, target = data.to(device), target.to(device)
             output = model(data)
 
+            # computing loss, metrics on test set
+            # Scale the output and target
+            output = output * std_ssh + mean_ssh
+            target = target * std_ssh + mean_ssh
+
             # Plotting the output
             print(f"Shape of output: {output.shape}")
             # Plotting the output
@@ -98,20 +114,23 @@ def main(config):
             data_cpu = data.cpu().numpy()
             target_cpu = target.cpu().numpy()
             output_cpu = output.cpu().numpy()
-            if i % 10 == 0:
-                # for j in range(output.shape[0]):
-                for j in range(min(output.shape[0], 5)):
-                    file_name = join(output_dir, f"pred_batch_{i}_sample_{j}.jpg")
-                    plot_predictions(data_cpu[j, :, :, :], target_cpu[j, :, :], output_cpu[j, :, :], file_name)
+            # For each batch plot the first 20 samples
+            for j in range(min(output.shape[0], 2)):
+                ex_num = i*batch_size + j + 1
+                file_name = join(output_dir, f"ex_{ex_num}.jpg")
+                plot_predictions(data_cpu[j, :, :, :], target_cpu[j, :, :], 
+                                 output_cpu[j, :, :], file_name, lats, lons, dataset_type)
 
-            # computing loss, metrics on test set
             loss = loss_fn(output, target)
             batch_size = data.shape[0]
             total_loss += loss.item() * batch_size
             for j, metric in enumerate(metric_fns):
                 total_metrics[j] += metric(output, target) * batch_size
 
-            validation_loss.append(loss.item())
+            # Compute the RMSE for each sample in the batch
+            rmse = torch.sqrt(torch.mean((output - target)**2, dim=(1, 2)))
+            for j in range(rmse.shape[0]):
+                validation_loss.append(rmse[j].item())
 
             # Save the output to a netcdf file
             for j in range(output.shape[0]):
@@ -129,6 +148,13 @@ def main(config):
     with open(loss_file, "w") as f:
         for loss in validation_loss:
             f.write(f"{loss}\n")
+
+    # Make a scatter plot of the validation loss
+    plt.figure()
+    plt.scatter(range(len(validation_loss)), validation_loss)
+    plt.xlabel("Sample number")
+    plt.ylabel("RMSE")
+    plt.savefig(join(output_dir, "validation_loss.png"))
 
     n_samples = len(data_loader.sampler)
     log = {'loss': total_loss / n_samples}

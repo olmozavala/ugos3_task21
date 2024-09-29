@@ -18,7 +18,10 @@ import os
 from os.path import join
 from datetime import datetime, date, timedelta
 import numpy as np
-
+import xarray as xr
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 # What this code does is obtain a climatology for each season (Spring, Summer, Fall, Winter) and then plot the climatology for each season
 # Comparing the model and the satellite data
 seasons = ['Spring', 'Summer', 'Fall', 'Winter']
@@ -34,6 +37,8 @@ lat = [17.5, 32.5]
 bbox = [lat[0], lat[1], lon[0], lon[1]]
 
 climatology = {}
+
+model_data, lats, lons = get_biorun_cicese_nemo_by_date_range(date(2017,1,1), date(2017,1,3), bbox=bbox)
 
 # %%
 for c_season in seasons:
@@ -87,3 +92,52 @@ for c_season in seasons:
         # %% -------- Plot the data for 
     except Exception as e:
         print(f"Error processing season {c_season}: {e}")
+
+
+# %% Generate images of swot masks 
+print("Reading SWOT masks")
+swot_masks_file = "/unity/f1/ozavala/DATA/GOFFISH/AVISO/Masks/swot_masks_2016_2024.nc"
+output_folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs"
+swot_masks = xr.open_dataset(swot_masks_file)
+imgs_to_plot = 15
+print(f"Total number of SWOT masks: {len(swot_masks.date)}")
+# Crop to the first 10 masks
+swot_masks = swot_masks.isel(date=slice(0, imgs_to_plot))
+# Interpolate to the model grid
+swot_masks = swot_masks.interp(lat=lats, lon=lons)
+print("Interpolated SWOT masks done!")
+
+# %%
+for i in range(imgs_to_plot):
+    print(f"Plotting mask {i}")
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={'projection': ccrs.PlateCarree()})
+    
+    # Plot the SWOT mask
+    im = ax.imshow(np.flipud(swot_masks['mask'].values[i,:,:]), 
+                   extent=[lons[0], lons[-1], lats[0], lats[-1]], 
+                   transform=ccrs.PlateCarree(),
+                   cmap='viridis',  # You can change the colormap as needed
+                   alpha=0.7)  # Adjust alpha to control the transparency of the mask
+    
+    # Add coastlines
+    ax.coastlines(resolution='10m', color='black', linewidth=1)
+    
+    # Add land on top of the image
+    land = cfeature.NaturalEarthFeature('physical', 'land', '10m', 
+                                        edgecolor='black', 
+                                        facecolor='lightgrey')
+    ax.add_feature(land, zorder=1)
+    
+    ax.set_title(f"SWOT mask {i}")
+    
+    # Set lat/lon ticks
+    ax.set_xticks(np.arange(np.floor(lons[0]), np.ceil(lons[-1]), 1), crs=ccrs.PlateCarree())
+    ax.set_yticks(np.arange(np.floor(lats[0]), np.ceil(lats[-1]), 1), crs=ccrs.PlateCarree())
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, p: f'{v:.0f}°W' if v < 0 else f'{v:.0f}°E'))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, p: f'{v:.0f}°S' if v < 0 else f'{v:.0f}°N'))
+    
+    plt.tight_layout()
+    # plt.show()
+    plt.savefig(join(output_folder, f"swot_mask_{i:02d}.png"))
+    plt.close()
+# %%

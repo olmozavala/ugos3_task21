@@ -53,7 +53,7 @@ class UNet(BaseModel):
 
     def __init__(self, previous_days, in_channels, out_channels, start_filters=64, num_levels=4, 
                     kernel_size=3,  batch_norm=False, cnn_per_level=2, 
-                    dropout_rate=0, hidden_activation="relu", output_activation="linear"):
+                    dropout_rate=0, hidden_activation="relu", output_activation="linear", dataset_type="regular"):
         """
         Initialize the UNet model.
 
@@ -71,7 +71,12 @@ class UNet(BaseModel):
         super(UNet, self).__init__()
         print("UNet model")
         cur_filters = -1  # Just initialize current filters
-        in_channels = in_channels * previous_days + 1
+
+        if dataset_type == "extended":
+            in_channels = in_channels * previous_days + 3
+        else:
+            in_channels = in_channels * previous_days + 1
+
         encoder_blocks = OrderedDict()
         decoder_blocks = OrderedDict()
         self.maxpools = nn.ModuleList()
