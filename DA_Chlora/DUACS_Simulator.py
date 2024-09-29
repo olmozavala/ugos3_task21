@@ -121,6 +121,8 @@ rmse_list = simple_duacs_interpolation(Y, lats, lons, make_plots=True)
 # %%
 mean_rmse = np.mean(rmse_list)
 title = f"Mean RMSE: {mean_rmse:.4f} m"
+vmin = 0.005
+vmax = 0.030
 
 plt.figure(figsize=(10, 6))
 plt.scatter(range(len(rmse_list)), rmse_list)

@@ -1,3 +1,4 @@
+# %%
 import argparse
 import torch
 import pickle
@@ -12,8 +13,11 @@ from os.path import join
 import os
 import json
 import matplotlib.pyplot as plt
+import numpy as np
 from data_loader.loader_utils import plot_predictions
 import xarray as xr
+# %%
+
 
 def main(config):
     logger = config.get_logger('test')
@@ -117,7 +121,7 @@ def main(config):
             # For each batch plot the first 20 samples
             for j in range(min(output.shape[0], 2)):
                 ex_num = i*batch_size + j + 1
-                file_name = join(output_dir, f"ex_{ex_num}.jpg")
+                file_name = join(output_dir, f"{model_name}_ex_{ex_num:03d}.png")
                 plot_predictions(data_cpu[j, :, :, :], target_cpu[j, :, :], 
                                  output_cpu[j, :, :], file_name, lats, lons, dataset_type)
 
@@ -132,16 +136,17 @@ def main(config):
             for j in range(rmse.shape[0]):
                 validation_loss.append(rmse[j].item())
 
-            # Save the output to a netcdf file
-            for j in range(output.shape[0]):
-                output_file = join(output_dir, f"pred_batch_{i}_sample_{j}.nc")
-                xr.Dataset({
-                    'output': (['latitude', 'longitude'], output_cpu[j, :, :]),
-                    'target': (['latitude', 'longitude'], target_cpu[j, :, :])
-                }, coords={
-                    'latitude': lats,
-                    'longitude': lons
-                }).to_netcdf(output_file)
+            if save_predictions:
+                # Save the output to a netcdf file
+                for j in range(output.shape[0]):
+                    output_file = join(output_dir, f"pred_batch_{i}_sample_{j}.nc")
+                    xr.Dataset({
+                        'output': (['latitude', 'longitude'], output_cpu[j, :, :]),
+                        'target': (['latitude', 'longitude'], target_cpu[j, :, :])
+                    }, coords={
+                        'latitude': lats,
+                        'longitude': lons
+                    }).to_netcdf(output_file)
 
     # Save the loss
     loss_file = join(output_dir, "loss.csv")
@@ -150,11 +155,17 @@ def main(config):
             f.write(f"{loss}\n")
 
     # Make a scatter plot of the validation loss
+    mean_rmse = np.mean(validation_loss)
     plt.figure()
+    title = f"Mean RMSE: {mean_rmse:.4f} m"
     plt.scatter(range(len(validation_loss)), validation_loss)
-    plt.xlabel("Sample number")
-    plt.ylabel("RMSE")
-    plt.savefig(join(output_dir, "validation_loss.png"))
+    plt.xlabel("Examples from validation set")
+    plt.ylabel("RMSE (m)")
+    plt.title(title)
+    plt.savefig(join(output_dir, "validation_loss.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+    # Save the RMSE as a csv file
+    np.savetxt(join(output_dir, "validation_loss.csv"), validation_loss, delimiter=",")
 
     n_samples = len(data_loader.sampler)
     log = {'loss': total_loss / n_samples}
@@ -173,5 +184,29 @@ if __name__ == '__main__':
     args.add_argument('-d', '--device', default=None, type=str,
                       help='indices of GPUs to enable (default: all)')
 
+    save_predictions = False
+    args.add_argument('-s', '--save_predictions', default=False, type=bool,
+                      help='Save the predictions to a netcdf file (default: False)')
+
     config = ConfigParser.from_args(args)
     main(config)
+
+# %% Redoo RMSE plot
+# Read the RMSE from the csv file
+# folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset/"
+folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation"
+file_name = join(folder, "loss.csv")
+rmse_data = np.loadtxt(file_name, delimiter=",")
+mean_rmse = np.mean(rmse_data)
+vmin = 0.005
+vmax = 0.030
+# Make a scatter plot of the RMSE
+plt.figure()
+plt.scatter(range(len(rmse_data)), rmse_data)
+plt.xlabel("Examples from validation set")
+plt.ylabel("RMSE (m)")
+plt.title(f"Mean RMSE: {mean_rmse:.4f} m")
+# Set the x and y limits
+plt.ylim(vmin, vmax)
+plt.savefig(join(folder, "validation_loss.png"), dpi=300, bbox_inches='tight')
+plt.close()
