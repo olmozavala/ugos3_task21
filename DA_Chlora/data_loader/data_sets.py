@@ -178,6 +178,25 @@ class SimSatelliteDataset:
         elif dataset_type == "extended":
             # +3 because of the Gulf Mask and the two previous states with some noise
             self.tot_inputs = self.X.shape[1] * self.previous_days + 3
+        elif dataset_type == "gradient":
+            # + 5 because of the Gulf Mask, and the two previous states with some noise and the gradient (2 * 2)
+            self.tot_inputs = self.X.shape[1] * self.previous_days + 5
+
+        # If the dataset is gradient, then we append a second output with the magnitude of the gradient of the ssh
+        if dataset_type == "gradient":
+            print("Calculating the gradient of the SSH...")
+            all_grad_magitudes = []
+            for i in range(self.Y.shape[0]):
+                gradient_y, gradient_x = np.gradient(self.Y[i, :, :])
+                gradient_magnitude = np.sqrt(gradient_y**2 + gradient_x**2)
+                all_grad_magitudes.append(gradient_magnitude)
+
+            all_grad_magitudes = np.array(all_grad_magitudes)
+            # Normalize to mean 0 and std 1
+            all_grad_magitudes = (all_grad_magitudes - np.mean(all_grad_magitudes)) / np.std(all_grad_magitudes)
+            self.Y = np.stack([self.Y, all_grad_magitudes], axis=0)
+            # Flip the first and second dimensions in Y
+            self.Y = np.transpose(self.Y, (1, 0, 2, 3))
 
         # Make the mask a float32 tensor
         self.gulf_mask = torch.tensor(self.gulf_mask, dtype=torch.float32)
@@ -215,11 +234,23 @@ class SimSatelliteDataset:
         X_with_mask[-1, :, :] = self.gulf_mask
 
         if self.dataset_type == "extended":
-            noise_level = 0.5
+            noise_level = 0.5  # Default is 0.5 low is 0.1
             noise = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level
             # Add the previous two states with some noise at locations -2 and -3
             X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise
             X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise
+
+        if self.dataset_type == "gradient":
+            noise_level_ssh = 0.2
+            noise_level_gradient = 0.2
+            noise_ssh = np.random.randn(self.Y.shape[2],self.Y.shape[3]) * noise_level_ssh
+            noise_gradient = np.random.randn(self.Y.shape[2],self.Y.shape[3]) * noise_level_gradient
+            # Add the previous two states with some noise and its gradient
+            X_with_mask[-2, :, :] = self.Y[index-1, 0, :, :] + noise_ssh
+            X_with_mask[-3, :, :] = self.Y[index-1, 1, :, :] + noise_gradient
+            X_with_mask[-4, :, :] = self.Y[index-2, 0, :, :] + noise_ssh
+            X_with_mask[-5, :, :] = self.Y[index-2, 1, :, :] + noise_gradient
+
 
         # Only for testing purposes plot the input data
         if self.plot_data:
@@ -247,7 +278,7 @@ if __name__ == "__main__":
     training = False
     plot_data = True
     previous_days = 7
-    dataset_type = "regular"
+    dataset_type = "gradient"
     shuffle = True
 
     # Create an instance of the SimSatelliteDataset

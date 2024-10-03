@@ -1,13 +1,15 @@
 {
     "name": "UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation_full_dataset",
-    "_name": "UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset",
+    "_name": "UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset_low_noise",
+    "_name": "Extended_dataset_low_noise_loss_gradient",
+    "_name": "Extended_dataset_low_noise_gradient_only_in_loss",
     "n_gpu": 4,
+    "dataset_type_opts": ["regular", "extended", "gradient"],
     "arch": {
         "type": "UNet",
         "args": {
             "previous_days": 7, 
             "in_channels": 4,
-            "out_channels": 1,
             "start_filters": 32,
             "num_levels": 4,
             "kernel_size": 3,
@@ -16,7 +18,6 @@
             "dropout_rate": 0,
             "hidden_activation": "relu",
             "output_activation": "linear",
-            "_dataset": "regular/extended",
             "dataset_type": "regular"
         }
     },
@@ -63,6 +64,8 @@
     "tester": {
         "_weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset/0927_194001prevdays_7_activation_relu",
         "weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation/0927_084025prevdays_7_activation_relu",
+        "_weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/logs/Extended_dataset_low_noise_loss_gradient/0928_222938prevdays_7_activation_relu",
+        "_weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/Extended_dataset_low_noise_gradient_only_in_loss/0929_105200prevdays_7_activation_relu/",
         "output_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing"
     }
 }

@@ -11,6 +11,83 @@ import cmocean as cmo
 from data_loader.loader_utils import general_plot
 # from pykrige.ok3d import OrdinaryKriging3D
 
+# Error estimation from the AVISO files, averages per year. 
+folder = "/unity/f1/ozavala/DATA/GOFFISH/AVISO/GoM"
+# Read all the netcdf files in the folder and concatenate them
+ds = xr.open_mfdataset(join(folder, "202*.nc"))
+# ds = xr.open_dataset(join(folder, "2022-04.nc"))  # Test with a single file
+ds = ds.sel(longitude=slice(-98.5, -79), latitude=slice(14, 32))
+# I'm only interested in the err_sla variable
+err_sla = ds["err_sla"]
+adt = ds["adt"]
+# Crop to the GoM region
+# %% Plot one of the files to check
+def plot_aviso(data, title, gradient=False):
+    fig = plt.figure(figsize=(10, 10))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    # Plot the data
+    if gradient:
+        gradient = np.gradient(data[0,:,:])
+        norm_gradient = np.linalg.norm(gradient, axis=0)
+    # Copy the adt data to a new variable
+        gradient_copy = adt.copy()
+        # Replace the adt data with the norm_gradient
+        gradient_copy[0,:,:] = norm_gradient
+
+        im = ax.pcolormesh(data.longitude, data.latitude, gradient_copy[0,:,:], 
+                       transform=ccrs.PlateCarree(),
+                       cmap=cmo.cm.balance)
+    else:
+        im = ax.pcolormesh(data.longitude, data.latitude, data[0,:,:], 
+                       transform=ccrs.PlateCarree(),
+                       cmap=cmo.cm.balance)
+
+    # Add coastlines and borders
+    ax.add_feature(cfeature.COASTLINE)
+
+    # ax.gridlines(draw_labels=True, dms=True, x_inline=False, y_inline=False, xlocs=ax.get_xticks(), ylocs=ax.get_yticks())
+    ax.yaxis.set_visible(False)
+    ax.xaxis.set_visible(False)
+    ax.yaxis.tick_left()
+    ax.xaxis.tick_bottom()
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax, orientation='vertical', fraction=0.025, pad=0.08, aspect=30)
+    cbar.set_label(title)
+
+    # Set title
+    plt.title(f'{title} {pd.to_datetime(data.time.data[0]).strftime("%Y-%m-%d")}', fontsize=16)
+
+    # Adjust the extent to focus on the Gulf of Mexico
+    ax.set_extent([-98.5, -79, 14, 32], crs=ccrs.PlateCarree())
+
+    # plt.savefig("err_sla.png", dpi=300, bbox_inches='tight')
+    plt.show()
+    plt.close()
+
+# plot_aviso(err_sla, "Error SLA")
+plot_aviso(adt, "ADT")
+plot_aviso(adt, "Gradient of ADT", gradient=True)
+# %%
+# Get the mean of non nan values for each time step with numpy
+mean_sla = np.nanmean(err_sla, axis=(1,2))
+mean_sla_err = np.nanmean(mean_sla)
+# Scatter plot the mean ssh values by date
+plt.figure(figsize=(10, 6))
+plt.scatter(range(mean_sla.shape[0]), mean_sla)
+# Put the date as the label in the x axis
+plt.xlabel("Time (days)")
+plt.ylabel("Error (m)")
+# Get the axis tics from the dates (only the month and day) only plot 10 ticks
+plt.xticks(range(0, mean_sla.shape[0], mean_sla.shape[0]//10), 
+           [t.strftime("%m-%d-%Y") for t in pd.to_datetime(ds.time.data)[::mean_sla.shape[0]//10]], 
+           rotation=45)
+# Set the y_limits
+plt.ylim(.005, .030)
+plt.title(f"Mean of mean error of the SLA field by date: {mean_sla_err:.4f} m")
+plt.show()
+
+
 # %% Function used to plot the interpolated DUACS data and the original HR data with the difference
 def plot_duacs_interpolation(hr_ssh, duacs_ssh, lats, lons, output_file):
     proj = ccrs.PlateCarree()
@@ -126,6 +203,8 @@ vmax = 0.030
 
 plt.figure(figsize=(10, 6))
 plt.scatter(range(len(rmse_list)), rmse_list)
+# Set the y_limits
+plt.ylim(vmin, vmax)
 plt.xlabel("Examples from validation set")
 plt.ylabel("RMSE (m)")
 plt.title(title)

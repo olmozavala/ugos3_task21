@@ -51,7 +51,7 @@ class EncoderDecoderBlock(nn.Module):
 # Define the CNN architecture
 class UNet(BaseModel):
 
-    def __init__(self, previous_days, in_channels, out_channels, start_filters=64, num_levels=4, 
+    def __init__(self, previous_days, in_channels, start_filters=64, num_levels=4, 
                     kernel_size=3,  batch_norm=False, cnn_per_level=2, 
                     dropout_rate=0, hidden_activation="relu", output_activation="linear", dataset_type="regular"):
         """
@@ -74,8 +74,15 @@ class UNet(BaseModel):
 
         if dataset_type == "extended":
             in_channels = in_channels * previous_days + 3
+        elif dataset_type == "gradient":
+            in_channels = in_channels * previous_days + 5
         else:
             in_channels = in_channels * previous_days + 1
+
+        if dataset_type == "gradient":
+            out_channels = 2
+        else:
+            out_channels = 1
 
         encoder_blocks = OrderedDict()
         decoder_blocks = OrderedDict()

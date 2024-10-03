@@ -3,10 +3,10 @@ import cv2
 import os
 from os.path import join
 # Path to the directory containing the images
-images_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs'
+images_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs/single'
 # images_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/results/DUACS'
 output_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs/videos'
-starts_with = 'ex_'  # It can be 'Model' or 'Satellite' or DCHL_Comparison
+starts_with = 'UNet'  # It can be 'Model' or 'Satellite' or DCHL_Comparison
 video_title = 'default_sep_validation'
 
 video_name = join(output_folder, f'{video_title}.mp4')

@@ -18,13 +18,13 @@ from data_loader.loader_utils import plot_predictions
 import xarray as xr
 # %%
 
-
 def main(config):
     logger = config.get_logger('test')
 
     batch_size = config['data_loader']['args']['batch_size']
     data_dir = config['data_loader']['args']['data_dir']
     dataset_type = config['data_loader']['args']['dataset_type']
+    previous_days = config['data_loader']['args']['previous_days']
 
     # setup data_loader instances
     data_loader = getattr(module_data, config['data_loader']['type'])(
@@ -45,7 +45,6 @@ def main(config):
 
     mean_ssh = scalers["ssh"]["mean"]
     std_ssh = scalers["ssh"]["std"]
-
 
     # Read config.json from the weights_file directory
     weights_dir = config['tester']['weights_dir']
@@ -119,7 +118,8 @@ def main(config):
             target_cpu = target.cpu().numpy()
             output_cpu = output.cpu().numpy()
             # For each batch plot the first 20 samples
-            for j in range(min(output.shape[0], 2)):
+            # for j in range(min(output.shape[0], 20)):
+            for j in range(previous_days, min(output.shape[0], previous_days + 10)):
                 ex_num = i*batch_size + j + 1
                 file_name = join(output_dir, f"{model_name}_ex_{ex_num:03d}.png")
                 plot_predictions(data_cpu[j, :, :, :], target_cpu[j, :, :], 
@@ -193,8 +193,8 @@ if __name__ == '__main__':
 
 # %% Redoo RMSE plot
 # Read the RMSE from the csv file
-# folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset/"
-folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation"
+folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset/"
+# folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation"
 file_name = join(folder, "loss.csv")
 rmse_data = np.loadtxt(file_name, delimiter=",")
 mean_rmse = np.mean(rmse_data)

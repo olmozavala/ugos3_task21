@@ -83,17 +83,18 @@ def plot_single_batch_element(X, Y, input_names, days_before, output_file, lats,
     # It assumes the input names do not contain the mask.
 
     proj = ccrs.PlateCarree()
-    fig, axs = plt.subplots(len(input_names), days_before+1, figsize=(11*int(ceil((days_before+1)/2)), 4*len(input_names)), 
-                            subplot_kw={'projection': proj})
+    if dataset_type == "gradient":
+        fig, axs = plt.subplots(len(input_names), days_before+2, figsize=(11*int(ceil((days_before+1)/2)), 4*len(input_names)), 
+                                subplot_kw={'projection': proj})
+    else:
+        fig, axs = plt.subplots(len(input_names), days_before+1, figsize=(11*int(ceil((days_before+1)/2)), 4*len(input_names)), 
+                                subplot_kw={'projection': proj})
 
     # Apply the mask to all the input fields except the last one. Transform to nan where the mask is 0 
     X_masked = np.copy(X)
     for i in range(X.shape[0]-1):
         X_masked[i, :, :] = np.where(X[-1, :, :] == 0, np.nan, X[i, :, :])
 
-    land = cfeature.NaturalEarthFeature('physical', 'land', '10m', 
-                                        edgecolor='black', 
-                                        facecolor='lightgrey')
     # Colorbar settings
     fraction = 0.040
     pad = 0.04
@@ -128,26 +129,57 @@ def plot_single_batch_element(X, Y, input_names, days_before, output_file, lats,
                           f"{title} at {days_before - j} days before", 
                           cmap=cmap, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
            
+    if dataset_type != "gradient":
+        plot_col = -1
+    else:
+        plot_col = -2
     # Plot the mask in the last column, first row
-    general_plot(fig, axs[0, -1], X[-1, :, :], lats, lons, "Mask", 
-                  cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
+    general_plot(fig, axs[0, plot_col], X[-1, :, :], lats, lons, "Mask", 
+                  cmap=cmo.cm.solar, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
 
-    # Plot the true SSH
-    general_plot(fig, axs[-1, -1], Y, lats, lons, "True SSH", 
-                  cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
+    if dataset_type != "gradient":
+        # Plot the true SSH in the last column of the last row
+        general_plot(fig, axs[-1, -1], Y, lats, lons, "True SSH", 
+                cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
+    else:
+        # Plot the true SSH in the last row of the second to last column
+        general_plot(fig, axs[-1, -2], Y[0, :, :], lats, lons, "True SSH", 
+                cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
+        # Plot the true gradient of SSH in the second to last row of the second to last column
+        vmax_gradient = 1
+        vmin_gradient = -vmax_gradient
+        general_plot(fig, axs[-2, -2], Y[1, :, :], lats, lons, "True Gradient of SSH", 
+                cmap=cmo.cm.balance, vmin=vmin_gradient, vmax=vmax_gradient, proj=proj, fraction=fraction, pad=pad)
 
-    if dataset_type == "extended":
+    if dataset_type == "extended": 
         # Plot the previous SSH + noise
-        general_plot(fig, axs[1, -1], X[-2, :, :], lats, lons, "Previous SSH + noise", 
+        general_plot(fig, axs[1, plot_col], X[-2, :, :], lats, lons, "Previous SSH + noise", 
                       cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
        
         # Plot the two steps before SSH + noise
-        general_plot(fig, axs[2, -1], X[-3, :, :], lats, lons, "Two steps before SSH + noise", 
+        general_plot(fig, axs[2, plot_col], X[-3, :, :], lats, lons, "Two steps before SSH + noise", 
                       cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
+    
+    elif dataset_type == "gradient":
+        vmax_gradient = 1
+        vmin_gradient = -vmax_gradient
+        # Plot the previous ssh + noise
+        general_plot(fig, axs[0, -1], X[-2, :, :], lats, lons, "Previous SSH + noise", 
+                      cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
+        # Plot the previous gradient of ssh + noise
+        general_plot(fig, axs[1, -1], X[-3, :, :], lats, lons, "Previous Gradient of SSH + noise", 
+                      cmap=cmo.cm.balance, vmin=vmin_gradient, vmax=vmax_gradient, proj=proj, fraction=fraction, pad=pad)
+        # Plot the two steps before ssh + noise
+        general_plot(fig, axs[2, -1], X[-4, :, :], lats, lons, "Two steps before SSH + noise", 
+                      cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
+        # Plot the two steps before gradient of ssh + noise
+        general_plot(fig, axs[3, -1], X[-5, :, :], lats, lons, "Two steps before Gradient of SSH + noise", 
+                      cmap=cmo.cm.balance, vmin=vmin_gradient, vmax=vmax_gradient, proj=proj, fraction=fraction, pad=pad)
+       
     else:
         # Hide axes for empty subplots
         for i in range(1, len(input_names)-1):
-            axs[i, -1].axis('off')
+            axs[i, plot_col].axis('off')
 
     plt.tight_layout()
     plt.savefig(output_file)
@@ -158,10 +190,16 @@ def plot_predictions(X, Y, Y_pred, output_file, lats, lons, dataset_type="regula
     days_before = floor(X.shape[0]/len(input_names))
 
     proj = ccrs.PlateCarree()
-    # Create a figure with the new dimensions
-    fig, axs = plt.subplots(len(input_names), days_before + 1, 
-                            figsize=(12*int(ceil((days_before+1)/2)), 20), 
-                            subplot_kw={'projection': proj})
+
+    if dataset_type == "gradient":  # One extra column for the gradient of the two inputs
+        fig, axs = plt.subplots(len(input_names), days_before + 2, 
+                                figsize=(12*int(ceil((days_before+1)/2)), 20), 
+                                subplot_kw={'projection': proj})
+    else:
+        fig, axs = plt.subplots(len(input_names), days_before + 1, 
+                                # figsize=(12*int(ceil((days_before+1)/2)), 20), 
+                                figsize=(8*int(ceil((days_before+1)/2)), 12), 
+                                subplot_kw={'projection': proj})
     
     # Apply the mask to all input fields except the last one
     X_masked = np.copy(X)
@@ -228,8 +266,10 @@ def plot_predictions(X, Y, Y_pred, output_file, lats, lons, dataset_type="regula
     vmin = -0.6
     vmax = 0.6
     # Plot the true SSH
-    general_plot(fig, axs[0, 0], Y, lats, lons, "True SSH", 
-                  cmap=cmo.cm.balance, vmin=vmin, vmax=vmax, proj=proj, fraction=fraction, pad=pad)
+    if dataset_type != "gradient":
+        general_plot(fig, axs[0, 0], Y, lats, lons, "True SSH", 
+                    cmap=cmo.cm.balance, vmin=vmin, vmax=vmax, proj=proj, fraction=fraction, pad=pad)
+
     # Plot the predicted SSH
     general_plot(fig, axs[0, 1], Y_pred, lats, lons, "Predicted SSH", 
                   cmap=cmo.cm.balance, vmin=vmin, vmax=vmax, proj=proj, fraction=fraction, pad=pad)
@@ -259,7 +299,7 @@ def plot_predictions(X, Y, Y_pred, output_file, lats, lons, dataset_type="regula
     axs[1, 2].axis('off')
 
     plt.tight_layout()
-    plt.savefig(output_file.replace(".jpg", "_predictions.jpg"))
+    plt.savefig(output_file.replace(".png", "_predictions.png"))
     plt.close()
 
 def general_plot(fig, ax, data, lats, lons, title, vmin=None, vmax=None, 
