@@ -61,9 +61,9 @@ class SimSatelliteDataset:
 
         scalers_file = "scalers.pkl"
         if training:
-            pkl_file = "training.pkl"
+            # pkl_file = "training.pkl"
             # pkl_file = "training_full.pkl"
-            # pkl_file = "training_small.pkl"
+            pkl_file = "training_small.pkl"
         else:
             pkl_file = "validation.pkl"
 
@@ -80,6 +80,9 @@ class SimSatelliteDataset:
                     filtered_files = [f for f in all_files if pattern.match(f) and (
                         0 <= int(pattern.match(f).group(1)) <= 1582 or
                     1759 <= int(pattern.match(f).group(1)) <= 3340)]
+                elif pkl_file == "training_small.pkl":
+                    filtered_files = [f for f in all_files if pattern.match(f) and (
+                        int(pattern.match(f).group(1)) <= 100)]
                 elif pkl_file == "training_full.pkl":
                     # Use all the files
                     filtered_files = all_files
