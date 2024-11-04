@@ -3,11 +3,12 @@ import cv2
 import os
 from os.path import join
 # Path to the directory containing the images
-images_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs/single'
+#images_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs/single'
+images_folder = 'ai_outs/2video'
 # images_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/results/DUACS'
-output_folder = '/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/preproc_imgs/videos'
-starts_with = 'UNet'  # It can be 'Model' or 'Satellite' or DCHL_Comparison
-video_title = 'default_sep_validation'
+output_folder = 'ai_outs/2video'
+starts_with = 'ex'  # It can be 'Model' or 'Satellite' or DCHL_Comparison
+video_title = 'inline_validation'
 
 video_name = join(output_folder, f'{video_title}.mp4')
 fps = .8  # Set the frame rate

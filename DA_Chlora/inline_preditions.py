@@ -16,10 +16,6 @@ import matplotlib.pyplot as plt
 from data_loader.loader_utils import plot_predictions
 import xarray as xr
 
-# Only for jvelasco
-import torch._dynamo
-torch._dynamo.config.suppress_errors = True
-
 def main(config):
     logger = config.get_logger('test')
 
@@ -97,8 +93,7 @@ def main(config):
     files = [prev_prediction_file_1, prev_prediction_file_2]
     prev_pred = []
     for c_file in files:
-        print(f"Reading file: {c_file}")
-        ds = xr.open_dataset(c_file, engine="netcdf4")
+        ds = xr.open_dataset(c_file)
         cur_pred = ds['output'].data
         # Normalize the data
         cur_pred = (cur_pred - mean_ssh) / std_ssh

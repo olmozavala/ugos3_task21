@@ -29,6 +29,7 @@ class ConfigParser:
         if run_id is None: # use timestamp as default run-id
             run_id = datetime.now().strftime(r'%m%d_%H%M%S')
             prev_days = self.config['data_loader']['args']['previous_days']
+            horizon_days = self.config['data_loader']['args']['horizon_days']
             activation = self.config['arch']['args']['hidden_activation']
             run_id += f"prevdays_{prev_days}_activation_{activation}"
         self._save_dir = save_dir / 'models' / exper_name / run_id

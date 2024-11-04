@@ -143,12 +143,14 @@ def plot_single_batch_element(X, Y, input_names, days_before, output_file, lats,
                 cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
     else:
         # Plot the true SSH in the last row of the second to last column
-        general_plot(fig, axs[-1, -2], Y[0, :, :], lats, lons, "True SSH", 
+        general_plot(fig, axs[-1, -2], Y, lats, lons, "True SSH", 
                 cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
         # Plot the true gradient of SSH in the second to last row of the second to last column
         vmax_gradient = 1
         vmin_gradient = -vmax_gradient
-        general_plot(fig, axs[-2, -2], Y[1, :, :], lats, lons, "True Gradient of SSH", 
+        gdx, gdy = np.gradient(Y)
+        y_gradient = np.sqrt(gdx**2 + gdy**2)
+        general_plot(fig, axs[-2, -2], y_gradient, lats, lons, "True Gradient of SSH", 
                 cmap=cmo.cm.balance, vmin=vmin_gradient, vmax=vmax_gradient, proj=proj, fraction=fraction, pad=pad)
 
     if dataset_type == "extended": 
@@ -266,9 +268,9 @@ def plot_predictions(X, Y, Y_pred, output_file, lats, lons, dataset_type="regula
     vmin = -0.6
     vmax = 0.6
     # Plot the true SSH
-    if dataset_type != "gradient":
-        general_plot(fig, axs[0, 0], Y, lats, lons, "True SSH", 
-                    cmap=cmo.cm.balance, vmin=vmin, vmax=vmax, proj=proj, fraction=fraction, pad=pad)
+    #if dataset_type != "gradient":
+    general_plot(fig, axs[0, 0], Y, lats, lons, "True SSH", 
+                cmap=cmo.cm.balance, vmin=vmin, vmax=vmax, proj=proj, fraction=fraction, pad=pad)
 
     # Plot the predicted SSH
     general_plot(fig, axs[0, 1], Y_pred, lats, lons, "Predicted SSH", 
@@ -305,10 +307,10 @@ def plot_predictions(X, Y, Y_pred, output_file, lats, lons, dataset_type="regula
 def general_plot(fig, ax, data, lats, lons, title, vmin=None, vmax=None, 
                  proj=ccrs.PlateCarree(), fraction=0.05, pad=0.05,
                  cmap=cmo.cm.balance):
-    if vmin is None:
-        vmin = np.nanmin(data)
-    if vmax is None:
-        vmax = np.nanmax(data)
+    #if vmin is None:
+    #    vmin = np.nanmin(data)
+    #if vmax is None:
+    #    vmax = np.nanmax(data)
 
     land = cfeature.NaturalEarthFeature(
             category='physical',

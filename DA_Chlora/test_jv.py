@@ -1,3 +1,4 @@
+# %%
 import argparse
 import torch
 import pickle
@@ -11,17 +12,22 @@ from utils import prepare_device
 from os.path import join
 import os
 import json
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from data_loader.loader_utils import plot_predictions
 import xarray as xr
 
-# Only for jvelasco
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
+# %%
 
 def main(config):
     logger = config.get_logger('test')
+
+    batch_size = config['data_loader']['args']['batch_size']
+    data_dir = config['data_loader']['args']['data_dir']
+    dataset_type = config['data_loader']['args']['dataset_type']
+    previous_days = config['data_loader']['args']['previous_days']
 
     # setup data_loader instances
     data_loader = getattr(module_data, config['data_loader']['type'])(
@@ -30,14 +36,11 @@ def main(config):
         shuffle=False,
         validation_split=0.0,
         training=False,
+        # training=True,
         num_workers=config['data_loader']['args']['num_workers'],
         previous_days=config['data_loader']['args']['previous_days'],
-        dataset_type=config['data_loader']['args']['dataset_type']
+        dataset_type=dataset_type
     )
-
-    batch_size = config['data_loader']['args']['batch_size']
-    data_dir = config['data_loader']['args']['data_dir']
-    dataset_type = config['data_loader']['args']['dataset_type']
 
     # Read the scalers from the data_dir
     with open(join(data_dir, 'scalers.pkl'), 'rb') as f:
@@ -46,6 +49,7 @@ def main(config):
     mean_ssh = scalers["ssh"]["mean"]
     std_ssh = scalers["ssh"]["std"]
 
+    # Read config.json from the weights_file directory
     weights_dir = config['tester']['weights_dir']
     with open(join(weights_dir, 'config.json'), 'r') as f:
         training_config = json.load(f)
@@ -54,7 +58,7 @@ def main(config):
     model_name = training_config['name']
 
     # Setup output directory
-    output_dir = join(config['tester']['output_dir'], f"{model_name}_inline")
+    output_dir = join(config['tester']['output_dir'], model_name)
     os.makedirs(output_dir, exist_ok=True)
 
     weights_file = join(weights_dir, 'model_best.pth')
@@ -92,25 +96,6 @@ def main(config):
     lats = data_loader.dataset.lats
     lons = data_loader.dataset.lons
 
-    prev_prediction_file_1 = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation/pred_batch_0_sample_1.nc"
-    prev_prediction_file_2 = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation/pred_batch_0_sample_0.nc"
-    files = [prev_prediction_file_1, prev_prediction_file_2]
-    prev_pred = []
-    for c_file in files:
-        print(f"Reading file: {c_file}")
-        ds = xr.open_dataset(c_file, engine="netcdf4")
-        cur_pred = ds['output'].data
-        # Normalize the data
-        cur_pred = (cur_pred - mean_ssh) / std_ssh
-        prev_pred.append(cur_pred)
-
-    prev_pred = np.stack(prev_pred, axis=0)
-    print("Prev pred shape: ", prev_pred.shape)
-    # Get torch tensor
-    prev_prediction = torch.tensor(prev_pred)
-    # Send to device
-    prev_prediction = prev_prediction.to(device)
-
     validation_loss = []
     with torch.no_grad():
         for i, (data, target) in enumerate(tqdm(data_loader)):
@@ -121,77 +106,69 @@ def main(config):
 
             print(f"Batch {i} of {len(data_loader)}")
             data, target = data.to(device), target.to(device)
+            output = model(data)
 
-            # We need to replace the elements corresponding to the '
-            # last two predictions with the prev_predictions
-            outputs = []
-            if i == 0:
-                start_index = 2
-                prev_prediction[-2, :, :] = target[0, :, :]
-                prev_prediction[-1, :, :] = target[1, :, :]
-            else:
-                start_index = 0
-
-            for j in range(start_index, data.shape[0]): # Iterate from 2 to the end in current batch
-                print(f"Sample {j} of {data.shape[0]}")
-                data_input = data[j, :, :, :]
-                # Extend the input one dimension to simulate batch of 1
-                data_input[-2, :, :] = prev_prediction[-1, :, :]
-                data_input[-3, :, :] = prev_prediction[-2, :, :]
-                data_input = data_input.unsqueeze(0)
-                output = model(data_input) 
-                # Move the predictions and append the new predictions to the prev_predictions
-                prev_prediction[-2, :, :] = prev_prediction[-1, :, :]
-                prev_prediction[-1, :, :] = output[0, :, :]
-                outputs.append(output)
-
-            # Stack the outputs
-            outputs = torch.stack(outputs, dim=0)
-            # computing loss, metrics on test set only for the first index of the output and target (the SSH)
+            # computing loss, metrics on test set
             # Scale the output and target
-            outputs = outputs * std_ssh + mean_ssh
-            outputs = outputs.squeeze()
-            target = target[start_index:,:,:] * std_ssh + mean_ssh
+            output = output * std_ssh + mean_ssh
+            target = target * std_ssh + mean_ssh
 
             # Plotting the output
-            print(f"Shape of output: {outputs.shape} and target: {target.shape}")
+            print(f"Shape of output: {output.shape}")
+            # Plotting the output
             # Bring the data to numpy
             data_cpu = data.cpu().numpy()
             target_cpu = target.cpu().numpy()
-            output_cpu = outputs.cpu().numpy()
+            output_cpu = output.cpu().numpy()
             # For each batch plot the first 20 samples
-            for j in range(min(outputs.shape[0], 10)):
+            # for j in range(min(output.shape[0], 20)):
+            for j in range(previous_days, min(output.shape[0], previous_days + 10)):
                 ex_num = i*batch_size + j + 1
-                file_name = join(output_dir, f"ex_{ex_num:03d}.png")
-                plot_predictions(data_cpu[j, :, :, :], target_cpu[j, :, :], output_cpu[j, :, :], 
-                                 file_name, lats, lons, dataset_type=dataset_type)
+                file_name = join(output_dir, f"{model_name}_ex_{ex_num:03d}.png")
+                plot_predictions(data_cpu[j, :, :, :], target_cpu[j, :, :], 
+                                 output_cpu[j, :, :], file_name, lats, lons, dataset_type)
 
-            loss = loss_fn(outputs, target)
+            loss = loss_fn(output, target)
             batch_size = data.shape[0]
             total_loss += loss.item() * batch_size
             for j, metric in enumerate(metric_fns):
-                total_metrics[j] += metric(outputs, target) * batch_size
+                total_metrics[j] += metric(output, target) * batch_size
 
             # Compute the RMSE for each sample in the batch
-            rmse = torch.sqrt(loss)
-            validation_loss.append(rmse.item())
+            rmse = torch.sqrt(torch.mean((output - target)**2, dim=(1, 2)))
+            for j in range(rmse.shape[0]):
+                validation_loss.append(rmse[j].item())
 
-            # Save the output to a netcdf file
-            for j in range(outputs.shape[0]):
-                output_file = join(output_dir, f"pred_batch_{i}_sample_{j}.nc")
-                xr.Dataset({
-                    'output': (['latitude', 'longitude'], output_cpu[j, :, :]),
-                    'target': (['latitude', 'longitude'], target_cpu[j, :, :])
-                }, coords={
-                    'latitude': lats,
-                    'longitude': lons
-                }).to_netcdf(output_file)
+            if save_predictions:
+                # Save the output to a netcdf file
+                for j in range(output.shape[0]):
+                    output_file = join(output_dir, f"pred_batch_{i}_sample_{j}.nc")
+                    xr.Dataset({
+                        'output': (['latitude', 'longitude'], output_cpu[j, :, :]),
+                        'target': (['latitude', 'longitude'], target_cpu[j, :, :])
+                    }, coords={
+                        'latitude': lats,
+                        'longitude': lons
+                    }).to_netcdf(output_file)
 
     # Save the loss
     loss_file = join(output_dir, "loss.csv")
     with open(loss_file, "w") as f:
         for loss in validation_loss:
             f.write(f"{loss}\n")
+
+    # Make a scatter plot of the validation loss
+    mean_rmse = np.mean(validation_loss)
+    plt.figure()
+    title = f"Mean RMSE: {mean_rmse:.4f} m"
+    plt.scatter(range(len(validation_loss)), validation_loss)
+    plt.xlabel("Examples from validation set")
+    plt.ylabel("RMSE (m)")
+    plt.title(title)
+    plt.savefig(join(output_dir, "validation_loss.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+    # Save the RMSE as a csv file
+    np.savetxt(join(output_dir, "validation_loss.csv"), validation_loss, delimiter=",")
 
     n_samples = len(data_loader.sampler)
     log = {'loss': total_loss / n_samples}
@@ -210,5 +187,30 @@ if __name__ == '__main__':
     args.add_argument('-d', '--device', default=None, type=str,
                       help='indices of GPUs to enable (default: all)')
 
+    save_predictions = False
+    args.add_argument('-s', '--save_predictions', default=False, type=bool,
+                      help='Save the predictions to a netcdf file (default: False)')
+
     config = ConfigParser.from_args(args)
     main(config)
+
+# %% Redoo RMSE plot
+# Read the RMSE from the csv file
+folder = "/unity/g2/jvelasco/ai_outs/task21_set1/testing/Debug_model_gradient_mode_full_dataset"
+# folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation"
+file_name = join(folder, "loss.csv")
+rmse_data = np.loadtxt(file_name, delimiter=",")
+mean_rmse = np.mean(rmse_data)
+vmin = 0.005
+vmax = 0.030
+# Make a scatter plot of the RMSE
+plt.figure()
+plt.scatter(range(len(rmse_data)), rmse_data)
+plt.xlabel("Examples from validation set")
+plt.ylabel("RMSE (m)")
+plt.title(f"Mean RMSE: {mean_rmse:.4f} m")
+# Set the x and y limits
+plt.ylim(vmin, vmax)
+plt.savefig(join(folder, "validation_loss.png"), dpi=300, bbox_inches='tight')
+plt.close()
+# %%
