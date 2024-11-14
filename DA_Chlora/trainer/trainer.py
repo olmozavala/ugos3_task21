@@ -62,10 +62,14 @@ class TrainerAutoregressive(BaseTrainer):
             data, target = data.to(self.device), target.to(self.device)
 
             ii = 0  # This is the index for the previous predictions
-            dc = 7 * 4 # For now is hardcoded to 7 previous days and 4 channels (chlora, sst, altimeter, swot)
+            sday = 4 # One day includes 4 channels (chlora, sst, altimeter, swot)
+            dc = 7 * sday # For now is hardcoded to 7 previous days and 4 channels (chlora, sst, altimeter, swot)
+
             ss = 0
 
             self.optimizer.zero_grad()
+
+            final_output = target.clone()
             # I hardcoded the device type to cuda because I was getting an error when it tried to run on the CPU
             for ii in range(0, 2):
                 # Insert the previous predictions into the data
@@ -76,8 +80,9 @@ class TrainerAutoregressive(BaseTrainer):
                 # Concatenate the batch to advance the predictions
                 data_step = torch.cat((data[:, ss:(ss+dc), :, :], data[:, -3:, :, :]), dim=1)
                 output = self.model(data_step)
+                final_output[:, ii] = output.clone()
                 # Update the index for the previous predictions
-                ss += dc
+                ss += sday
                 # Define Sobel kernels for computing gradients along x and y directions
             sobel_kernel_x = torch.tensor([[[-1, 0, 1],
                                             [-2, 0, 2],
@@ -91,12 +96,12 @@ class TrainerAutoregressive(BaseTrainer):
             sobel_kernel_x = sobel_kernel_x.unsqueeze(1)  # Shape: [1, 1, 3, 3]
             sobel_kernel_y = sobel_kernel_y.unsqueeze(1)  # Shape: [1, 1, 3, 3]
 
-            output = output.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
+            final_output = final_output.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
             target = target.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
 
             # Compute gradients along x and y directions using conv2d
-            grad_output_x = F.conv2d(output, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
-            grad_output_y = F.conv2d(output, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+            grad_output_x = F.conv2d(final_output, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
+            grad_output_y = F.conv2d(final_output, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
 
             # Compute gradients of the target
             grad_target_x = F.conv2d(target, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
@@ -119,7 +124,7 @@ class TrainerAutoregressive(BaseTrainer):
                 # plt.close()
 
             # End of the loop for the previous predictions and computing the loss
-            output_loss = self.criterion(output, target)
+            output_loss = self.criterion(final_output, target)
             gradient_loss = self.criterion(output_gradient, target_gradient)
             loss = output_loss + gradient_loss
 
@@ -129,7 +134,7 @@ class TrainerAutoregressive(BaseTrainer):
             self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
             self.train_metrics.update('loss', loss.item())
             for met in self.metric_ftns:
-                self.train_metrics.update(met.__name__, met(output, target))
+                self.train_metrics.update(met.__name__, met(final_output, target))
 
             if batch_idx % self.log_step == 0:
                 self.logger.debug('Train Epoch: {} {} Loss: {:.6f}'.format(

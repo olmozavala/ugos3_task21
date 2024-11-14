@@ -61,6 +61,8 @@ class AutoregressiveDataset:
                  demo=False,
                  dataset_type="regular"):
         
+        if horizon_days < 1:
+            raise ValueError("Horizon days must be greater than 0")
         self.data_dir = data_dir
         self.previous_days = previous_days
         self.horizon_days = horizon_days
