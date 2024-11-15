@@ -15,7 +15,7 @@ from os.path import join
 # Only for jvelasco (toch has some problems to compile models)
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
-
+torch.serialization.add_safe_globals([ConfigParser])
 # fix random seeds for reproducibility
 SEED = 123
 torch.manual_seed(SEED)
@@ -61,7 +61,7 @@ if len(device_ids) > 1:
 # OPTIMIZATION
 weights_file = join("/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Debug_model_gradient_mode_full_dataset/1023_132535prevdays_7_activation_relu",
                      'model_best.pth')
-weights = torch.load(weights_file)
+weights = torch.load(weights_file, weights_only=False)
 # model.load_state_dict(weights['state_dict'])
 model = torch.compile(model)
 model.load_state_dict(weights['state_dict'])

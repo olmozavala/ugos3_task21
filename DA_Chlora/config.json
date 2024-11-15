@@ -5,7 +5,7 @@
     "_name": "Extended_dataset_low_noise_gradient_only_in_loss",
     "name": "Debug_model_gradient_mode_full_dataset",
     "name": "Debug_Autoregressive_model_gradient_mode_full_dataset",
-    "n_gpu": 4,
+    "n_gpu": 1,
     "dataset_type_opts": ["regular", "extended", "gradient"],
     "arch": {
         "type": "UNet",
@@ -26,13 +26,13 @@
     "data_loader": {
         "type": "DefaultDataLoader",
         "args":{
-            "data_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/",
+            "data_dir": "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/",
             "batch_size": 80,
             "shuffle": true,
             "validation_split": 0.1,
             "num_workers": 10,
             "previous_days": 7,
-            "horizon_days":2,
+            "horizon_days": 2,
             "dataset_type": "gradient"
         }
     },
@@ -73,3 +73,4 @@
         "output_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/testing"
     }
 }
+
