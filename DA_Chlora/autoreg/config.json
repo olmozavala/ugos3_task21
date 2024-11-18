@@ -22,7 +22,7 @@
         "type": "DefaultDataLoader",
         "args":{
             "data_dir": "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/",
-            "batch_size": 2,
+            "batch_size": 80,
             "shuffle": true,
             "validation_split": 0.1,
             "num_workers": 10,

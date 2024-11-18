@@ -138,9 +138,10 @@ class TrainerAutoregressive(BaseTrainer):
                 # End of the loop for the previous predictions and computing the loss
                 output_loss = self.criterion(output, target[:,ii,:,:])
                 gradient_loss = self.criterion(output_gradient, target_gradient)
-                loss += output_loss + gradient_loss
+                step_loss = (output_loss + gradient_loss)/ 2 # because accumulation of the loss is 2 steps in this case
+                step_loss.backward(retain_graph=True)
+                loss += step_loss
 
-            loss.backward()
             self.optimizer.step()
 
             self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
@@ -194,7 +195,7 @@ class TrainerAutoregressive(BaseTrainer):
                     # Concatenate the batch to advance the predictions
                     data_step = torch.cat((data[:, ss:(ss+dc), :, :], data[:, -3:, :, :]), dim=1)
                     output = self.model(data_step)
-                    loss += self.criterion(output, target)
+                    loss += self.criterion(output, target)/2
 
                 self.writer.set_step((epoch - 1) * len(self.valid_data_loader) + batch_idx, 'valid')
                 self.valid_metrics.update('loss', loss.item())
