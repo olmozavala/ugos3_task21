@@ -133,4 +133,4 @@ dmypy.json
 .pyre/
 
 # Linked paths
-ai_outs/
+ai_outs

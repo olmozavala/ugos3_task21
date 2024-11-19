@@ -1,6 +1,7 @@
 # For testing the dataset
 import sys
-sys.path.append("/unity/f1/ozavala/CODE/ugos3_task21/DA_Chlora") # Only for testing purposes
+#sys.path.append("/unity/f1/ozavala/CODE/ugos3_task21/DA_Chlora") # Only for testing purposes
+sys.path.append("/home/jevz/github/ugos3_task21/DA_Chlora") # Only for testing purposes
 import os
 import pickle
 import numpy as np
@@ -40,6 +41,26 @@ def scale_data_dataset(data, scalers, name, training=True):
     # Any nan values in the original data should be nan in the scaled data
     scaled_data = np.where(np.isnan(data.data), np.nan, scaled_data)
     return scaled_data, scalers
+
+# %% Simulate DUACs background field
+def groundto2background(data, lat=(14.18613, 30.61901), lon=(-89.33899, -78.666664), x=712, y=648, resolution=0.25):
+    downsampled_lats = np.arange(lat[0], lat[1], resolution)
+    downsampled_lons = np.arange(lon[0], lon[1], resolution)
+    upsampled_lats = np.linspace(lat[0], lat[1], y)
+    upsampled_lons = np.linspace(lon[0], lon[1], x)
+
+    ds = xr.Dataset({'ssh': (['latitude', 'longitude'], data)},
+                    coords={'latitude': ('latitude', upsampled_lats),
+                            'longitude': ('longitude', upsampled_lons)})
+    ds = ds.interp(
+        latitude=downsampled_lats, 
+        longitude=downsampled_lons, 
+        method='linear').interp(
+            latitude=upsampled_lats, 
+            longitude=upsampled_lons, 
+            method='linear')
+    
+    return ds.ssh.data
 
 class SimSatelliteDataset:
     # Total 1758*2 = 3516 training examples
@@ -247,11 +268,13 @@ class SimSatelliteDataset:
             X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise
 
         if self.dataset_type == "gradient":
-            noise_level_ssh = 0.2
-            noise_ssh = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level_ssh
+            #noise_level_ssh = 0.2
+            #noise_ssh = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level_ssh
             # Add the previous two states with some noise and its gradient
-            X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise_ssh
-            X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise_ssh
+            # X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise_ssh
+            # X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise_ssh
+            X_with_mask[-2, :, :] = groundto2background(self.Y[index-1, :, :]) 
+            X_with_mask[-3, :, :] = groundto2background(self.Y[index-2, :, :]) 
 
 
 
@@ -259,7 +282,8 @@ class SimSatelliteDataset:
         if self.plot_data:
             input_names = ["sst", "chlora", "ssh_track", "swot"]
             plot_single_batch_element(X_with_mask, self.Y[index], input_names, self.previous_days, 
-                                      f"/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/batch_example_{index}.jpg",
+                                      #f"/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/batch_example_{index}.jpg",
+                                      f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_example_{index}.jpg",
                                       self.lats, self.lons, dataset_type=self.dataset_type)
 
         return X_with_mask, self.Y[index]
@@ -276,7 +300,7 @@ class SimSatelliteDataset:
 
 if __name__ == "__main__":
 # Main function to test the dataset
-    data_dir = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"
+    data_dir = "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"
     batch_size = 1
     training = False
     plot_data = True
