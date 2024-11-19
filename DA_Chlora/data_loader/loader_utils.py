@@ -146,7 +146,7 @@ def plot_single_batch_element(X, Y, input_names, days_before, output_file, lats,
         general_plot(fig, axs[-1, -2], Y, lats, lons, "True SSH", 
                 cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
         # Plot the true gradient of SSH in the second to last row of the second to last column
-        vmax_gradient = 1
+        vmax_gradient = 0.05 #1
         vmin_gradient = -vmax_gradient
         gdx, gdy = np.gradient(Y)
         y_gradient = np.sqrt(gdx**2 + gdy**2)
@@ -163,19 +163,19 @@ def plot_single_batch_element(X, Y, input_names, days_before, output_file, lats,
                       cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
     
     elif dataset_type == "gradient":
-        vmax_gradient = 1
+        vmax_gradient = 0.05 #1
         vmin_gradient = -vmax_gradient
         # Plot the previous ssh + noise
         general_plot(fig, axs[0, -1], X[-2, :, :], lats, lons, "Previous SSH + noise", 
                       cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
         # Plot the previous gradient of ssh + noise
-        general_plot(fig, axs[1, -1], X[-3, :, :], lats, lons, "Previous Gradient of SSH + noise", 
+        general_plot(fig, axs[1, -1], X[-2, :, :], lats, lons, "Previous Gradient of SSH + noise", 
                       cmap=cmo.cm.balance, vmin=vmin_gradient, vmax=vmax_gradient, proj=proj, fraction=fraction, pad=pad)
         # Plot the two steps before ssh + noise
-        general_plot(fig, axs[2, -1], X[-4, :, :], lats, lons, "Two steps before SSH + noise", 
+        general_plot(fig, axs[2, -1], X[-3, :, :], lats, lons, "Two steps before SSH + noise", 
                       cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
         # Plot the two steps before gradient of ssh + noise
-        general_plot(fig, axs[3, -1], X[-5, :, :], lats, lons, "Two steps before Gradient of SSH + noise", 
+        general_plot(fig, axs[3, -1], X[-3, :, :], lats, lons, "Two steps before Gradient of SSH + noise", 
                       cmap=cmo.cm.balance, vmin=vmin_gradient, vmax=vmax_gradient, proj=proj, fraction=fraction, pad=pad)
        
     else:
