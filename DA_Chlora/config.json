@@ -3,9 +3,9 @@
     "_name": "UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset_low_noise",
     "_name": "Extended_dataset_low_noise_loss_gradient",
     "_name": "Extended_dataset_low_noise_gradient_only_in_loss",
-    "name": "Debug_model_gradient_mode_full_dataset",
-    "name": "Debug_Autoregressive_model_gradient_mode_full_dataset",
-    "n_gpu": 1,
+    "name": "Debug_model_gradient_mode_full_dataset_restored",
+
+    "n_gpu": 4,
     "dataset_type_opts": ["regular", "extended", "gradient"],
     "arch": {
         "type": "UNet",
@@ -27,14 +27,13 @@
         "type": "DefaultDataLoader",
         "args":{
             "data_dir": "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/",
-            "batch_size": 1,
+            "batch_size": 80,
             "shuffle": true,
             "validation_split": 0.1,
             "num_workers": 10,
             "previous_days": 7,
             "horizon_days": 2,
-            "dataset_type": "gradient",
-            "demo": true
+            "dataset_type": "gradient"
         }
     },
     "optimizer": {

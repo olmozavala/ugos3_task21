@@ -5,10 +5,11 @@
 - [x] Remove the gradient calculation from the data loader, it is computed as the model trains
 - [ ] Make the noise added to the ssh proportional to the magnitude of the ssh
 - [ ] Update the config file to add a `loss_mode` parameter to choose between `rmse` and `rmse_gradient`
-- [ ] Work on the implementation of an autoregressive model using the current model
+- [x] Work on the implementation of an autoregressive model using the current model
     - [x] Create a new dataloder subclass that enables to pass the previous predictions as input and future predictions as target
-    - [ ] Update the model architecture to enable the input of previous predictions
-- [ ] Update the README.md to reflect the new changes
+    - [x] Update the model architecture to enable the input of previous predictions
+    - **Moved to a separate folder** check `autoreg` folder
+- [x] Update the README.md to reflect the new changes
 
 This model is a UNet with upsampling layers.
 
