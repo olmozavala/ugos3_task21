@@ -11,11 +11,15 @@ from parse_config import ConfigParser
 from trainer import TrainerAutoregressive
 from utils import prepare_device
 from os.path import join
+import os
+
+# Specify the GPUs to use (GPU 1 and 2)
+#qos.environ["CUDA_VISIBLE_DEVICES"] = "3,4"
 
 # Only for jvelasco (toch has some problems to compile models)
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
-
+torch.serialization.add_safe_globals([ConfigParser])
 # fix random seeds for reproducibility
 SEED = 123
 torch.manual_seed(SEED)
@@ -53,15 +57,22 @@ logger.info(model)
 
 # prepare for (multi-device) GPU training
 device, device_ids = prepare_device(config['n_gpu'])
+
+# Set device_ids for DataParallel
+#print(torch.cuda.device_count()))
+# model = model.to(device)
+#os.environ["CUDA_VISIBLE_DEVICES"]="1,2,3"
+device = torch.device("cuda:0")
 model = model.to(device)
 
+device_ids = [0,1,2,3]
 if len(device_ids) > 1:
     model = torch.nn.DataParallel(model, device_ids=device_ids)
 
 # OPTIMIZATION
 weights_file = join("/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Debug_model_gradient_mode_full_dataset/1023_132535prevdays_7_activation_relu",
                      'model_best.pth')
-weights = torch.load(weights_file)
+weights = torch.load(weights_file, weights_only=False)
 # model.load_state_dict(weights['state_dict'])
 model = torch.compile(model)
 model.load_state_dict(weights['state_dict'])

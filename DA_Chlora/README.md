@@ -5,10 +5,11 @@
 - [x] Remove the gradient calculation from the data loader, it is computed as the model trains
 - [ ] Make the noise added to the ssh proportional to the magnitude of the ssh
 - [ ] Update the config file to add a `loss_mode` parameter to choose between `rmse` and `rmse_gradient`
-- [ ] Work on the implementation of an autoregressive model using the current model
+- [x] Work on the implementation of an autoregressive model using the current model
     - [x] Create a new dataloder subclass that enables to pass the previous predictions as input and future predictions as target
-    - [ ] Update the model architecture to enable the input of previous predictions
-- [ ] Update the README.md to reflect the new changes
+    - [x] Update the model architecture to enable the input of previous predictions
+    - **Moved to a separate folder** check `autoreg` folder
+- [x] Update the README.md to reflect the new changes
 
 This model is a UNet with upsampling layers.
 
@@ -21,3 +22,5 @@ The user must select a set number of previous days to use as input data (default
 
 ## Autoregressive model in construction
 The new data loader class is `data_autoregressive.py`. It is used to train an autoregressive model that uses the previous predictions as input and the future predictions as target. It has a new flag `horizon_days` that specifies the number of days ahead we want to predict.
+
+Its getting harder to make partial changes from the current model. I will move to a separtate folder to work in the autoregressive model. SInce It requieres a lot of changes and this will most likely break the current model, if they are not already broken. I will creating copies insde this new folrder an create a new `README.md` inside it to track the changes and the TODOs.

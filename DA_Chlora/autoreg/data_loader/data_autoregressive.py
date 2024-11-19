@@ -1,12 +1,12 @@
 import sys
-sys.path.append("/unity/g2/jvelasco/github/ugos3_task21/DA_Chlora") # Only for testing purposes
+sys.path.append("/unity/g2/jvelasco/github/ugos3_task21/DA_Chlora/autoreg") # Only for testing purposes
 import os
 import pickle
 import numpy as np
 import xarray as xr
 import torch
 from os.path import join
-from data_loader.loader_utils import *
+#from data_loader.loader_utils import *
 import matplotlib.pyplot as plt
 
 
@@ -58,9 +58,11 @@ class AutoregressiveDataset:
                  plot_data=False, training=True, 
                  input_vars=["sst", "chlora", "ssh_track", "swot"], 
                  output_vars=["ssh"], 
-                 demo=False,
-                 dataset_type="regular"):
+                 dataset_type="regular", 
+                 demo=False):
         
+        if horizon_days < 1:
+            raise ValueError("Horizon days must be greater than 0")
         self.data_dir = data_dir
         self.previous_days = previous_days
         self.horizon_days = horizon_days
@@ -174,9 +176,10 @@ class AutoregressiveDataset:
         if self.plot_data:
             #self.plot_batch(X_with_mask, Y_autoregressive, index)
             input_names = ["sst", "chlora", "ssh_track", "swot"]
-            plot_single_batch_element(X_with_mask, self.Y[index], input_names, self.previous_days+self.horizon_days, 
-                                      f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_example_{index}.jpg",
-                                      self.lats, self.lons, dataset_type="gradient")
+            print(f"Y_autoregressive.shape: {Y_autoregressive.shape}, X_with_mask.shape: {X_with_mask.shape}")
+            #plot_single_batch_element(X_with_mask, self.Y[index], input_names, self.previous_days+self.horizon_days, 
+            #                          f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_example_{index}.jpg",
+            #                          self.lats, self.lons, dataset_type="gradient")
 
         return X_with_mask, Y_autoregressive
     
@@ -216,7 +219,7 @@ class AutoregressiveDataset:
 
 if __name__ == "__main__":
     # Main function to test the dataset
-    data_dir = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"
+    data_dir = "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/"
     batch_size = 1
     training = False
     plot_data = False
