@@ -197,6 +197,7 @@ class SimSatelliteDataset:
         new_width = (self.X.shape[3] // 8) * 8
         self.X = self.X[:, :, :new_height, :new_width]
         self.Y = self.Y[:, :new_height, :new_width]
+        self.Y_aux = self.Y_aux[:, :new_height, :new_width]
         self.gulf_mask = self.gulf_mask[:new_height, :new_width]
         
         if dataset_type == "regular":
