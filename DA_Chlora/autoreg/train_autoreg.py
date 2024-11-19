@@ -11,6 +11,10 @@ from parse_config import ConfigParser
 from trainer import TrainerAutoregressive
 from utils import prepare_device
 from os.path import join
+import os
+
+# Specify the GPUs to use (GPU 1 and 2)
+#qos.environ["CUDA_VISIBLE_DEVICES"] = "3,4"
 
 # Only for jvelasco (toch has some problems to compile models)
 import torch._dynamo
@@ -53,8 +57,15 @@ logger.info(model)
 
 # prepare for (multi-device) GPU training
 device, device_ids = prepare_device(config['n_gpu'])
+
+# Set device_ids for DataParallel
+#print(torch.cuda.device_count()))
+# model = model.to(device)
+#os.environ["CUDA_VISIBLE_DEVICES"]="1,2,3"
+device = torch.device("cuda:0")
 model = model.to(device)
 
+device_ids = [0,1,2,3]
 if len(device_ids) > 1:
     model = torch.nn.DataParallel(model, device_ids=device_ids)
 
@@ -64,7 +75,7 @@ weights_file = join("/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Debu
 weights = torch.load(weights_file, weights_only=False)
 # model.load_state_dict(weights['state_dict'])
 model = torch.compile(model)
-# model.load_state_dict(weights['state_dict'])
+model.load_state_dict(weights['state_dict'])
 
 # get function handles of loss and metrics
 criterion = getattr(module_loss, config['loss'])

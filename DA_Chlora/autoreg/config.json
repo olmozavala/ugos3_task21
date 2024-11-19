@@ -1,6 +1,6 @@
 {
-    "name": "Debug_Autoregressive_model_gradient_mode_full_dataset",
-    "n_gpu": 1,
+    "name": "Debug_Autoregressive_model_gradient_mode_full_dataset_pretrained_weights",
+    "n_gpu": 3,
     "dataset_type_opts": ["regular", "extended", "gradient"],
     "arch": {
         "type": "UNet",
@@ -22,14 +22,14 @@
         "type": "DefaultDataLoader",
         "args":{
             "data_dir": "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/",
-            "batch_size": 80,
+            "batch_size": 32,
             "shuffle": true,
             "validation_split": 0.1,
             "num_workers": 10,
             "previous_days": 7,
             "horizon_days": 2,
             "dataset_type": "gradient",
-            "demo": true
+            "demo": false
         }
     },
     "optimizer": {

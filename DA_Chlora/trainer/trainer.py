@@ -6,7 +6,7 @@ from base import BaseTrainer
 from utils import inf_loop, MetricTracker
 
 
-class TrainerAutoregressive(BaseTrainer):
+class _Trainer(BaseTrainer):
     """
     Trainer class
     """
@@ -54,67 +54,44 @@ class TrainerAutoregressive(BaseTrainer):
         self.model.train()
         self.train_metrics.reset()
         for batch_idx, (data, target) in enumerate(self.data_loader):
-
-            # Here we need to add the previous predictions as input and the future predictions as target and all the necessary modifications to the model
-            # 1. Condition if ii = 0 we keep the data as is
-            # 2. Condition if ii > 0 we need to concatenate the previous predictions to the data
-            #if batch_idx == 0:
             data, target = data.to(self.device), target.to(self.device)
 
-            ii = 0  # This is the index for the previous predictions
-            sday = 4 # One day includes 4 channels (chlora, sst, altimeter, swot)
-            dc = 7 * sday # For now is hardcoded to 7 previous days and 4 channels (chlora, sst, altimeter, swot)
-
-            ss = 0
-
             self.optimizer.zero_grad()
-
-            final_output = target.clone()
             # I hardcoded the device type to cuda because I was getting an error when it tried to run on the CPU
-            for ii in range(0, 2):
-                # Insert the previous predictions into the data
-                if ii > 0:
-                    data[:, -3, :, :] = data[:, -2, :, :].clone()
-                    data[:, -2, :, :] = output
 
-                # Concatenate the batch to advance the predictions
-                data_step = torch.cat((data[:, ss:(ss+dc), :, :], data[:, -3:, :, :]), dim=1)
-                output = self.model(data_step)
-                final_output[:, ii] = output.clone()
-                # Update the index for the previous predictions
-                ss += sday
-                # Define Sobel kernels for computing gradients along x and y directions
-            sobel_kernel_x = torch.tensor([[[-1, 0, 1],
-                                            [-2, 0, 2],
-                                            [-1, 0, 1]]], dtype=output.dtype, device=output.device)
+            output = self.model(data)
+            if self.config['arch']['args']['dataset_type'] == "gradient":
+    # Define Sobel kernels for computing gradients along x and y directions
+                sobel_kernel_x = torch.tensor([[[-1, 0, 1],
+                                                [-2, 0, 2],
+                                                [-1, 0, 1]]], dtype=output.dtype, device=output.device)
 
-            sobel_kernel_y = torch.tensor([[[-1, -2, -1],
-                                            [ 0,  0,  0],
-                                            [ 1,  2,  1]]], dtype=output.dtype, device=output.device)
+                sobel_kernel_y = torch.tensor([[[-1, -2, -1],
+                                                [ 0,  0,  0],
+                                                [ 1,  2,  1]]], dtype=output.dtype, device=output.device)
 
-            # Reshape kernels to match the conv2d weight shape: [out_channels, in_channels, kH, kW]
-            sobel_kernel_x = sobel_kernel_x.unsqueeze(1)  # Shape: [1, 1, 3, 3]
-            sobel_kernel_y = sobel_kernel_y.unsqueeze(1)  # Shape: [1, 1, 3, 3]
+                # Reshape kernels to match the conv2d weight shape: [out_channels, in_channels, kH, kW]
+                sobel_kernel_x = sobel_kernel_x.unsqueeze(1)  # Shape: [1, 1, 3, 3]
+                sobel_kernel_y = sobel_kernel_y.unsqueeze(1)  # Shape: [1, 1, 3, 3]
 
-            final_output = final_output.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
-            target = target.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
+                output = output.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
+                target = target.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
 
-            # Compute gradients along x and y directions using conv2d
-            grad_output_x = F.conv2d(final_output, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
-            grad_output_y = F.conv2d(final_output, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+                # Compute gradients along x and y directions using conv2d
+                grad_output_x = F.conv2d(output, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
+                grad_output_y = F.conv2d(output, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
 
-            # Compute gradients of the target
-            grad_target_x = F.conv2d(target, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
-            grad_target_y = F.conv2d(target, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+                # Compute gradients of the target
+                grad_target_x = F.conv2d(target, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
+                grad_target_y = F.conv2d(target, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
 
-            # Compute the gradient magnitude (2D norm) for each element in the batch
-            grad_magnitude_output = torch.sqrt(grad_output_x ** 2 + grad_output_y ** 2)  # Shape: [batch_size, 1, height, width]
-            grad_magnitude_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2)  # Shape: [batch_size, 1, height, width]
+                # Compute the gradient magnitude (2D norm) for each element in the batch
+                grad_magnitude_output = torch.sqrt(grad_output_x ** 2 + grad_output_y ** 2)  # Shape: [batch_size, 1, height, width]
+                grad_magnitude_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2)  # Shape: [batch_size, 1, height, width]
 
-            # Normalize the gradients with mean 0 and std 1
-            output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / grad_magnitude_output.std()
-            target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / grad_magnitude_target.std()
-                
+                # Normalize the gradients with mean 0 and std 1
+                output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / grad_magnitude_output.std()
+                target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / grad_magnitude_target.std()
 
                 # For debugging purposes plot one of the gradients
                 # import matplotlib.pyplot as plt
@@ -122,11 +99,11 @@ class TrainerAutoregressive(BaseTrainer):
                 # plt.colorbar()
                 # plt.savefig("target_gradient.png")
                 # plt.close()
-
-            # End of the loop for the previous predictions and computing the loss
-            output_loss = self.criterion(final_output, target)
-            gradient_loss = self.criterion(output_gradient, target_gradient)
-            loss = output_loss + gradient_loss
+                output_loss = self.criterion(output, target)
+                gradient_loss = self.criterion(output_gradient, target_gradient)
+                loss = output_loss + gradient_loss
+            else:
+                loss = self.criterion(output, target)
 
             loss.backward()
             self.optimizer.step()
@@ -134,7 +111,7 @@ class TrainerAutoregressive(BaseTrainer):
             self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
             self.train_metrics.update('loss', loss.item())
             for met in self.metric_ftns:
-                self.train_metrics.update(met.__name__, met(final_output, target))
+                self.train_metrics.update(met.__name__, met(output, target))
 
             if batch_idx % self.log_step == 0:
                 self.logger.debug('Train Epoch: {} {} Loss: {:.6f}'.format(
