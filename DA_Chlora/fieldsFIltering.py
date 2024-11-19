@@ -13,8 +13,7 @@ files = sorted(glob(join(indir, '*.nc')))
 
 test_file = files[0]
 
-# %% Function to plot the AVISO fields
-
+#Function to plot the AVISO fields
 def plot_aviso(data, title, gradient=False):
     fig, ax = plt.subplots(figsize=(10, 10))
     # Plot the data
@@ -81,45 +80,38 @@ plt.title(f"Mean of mean error of the SLA field by date: {mean_sla_err:.4f} m")
 plt.show()
 
 # %% Simulate DUACs background field
+def groundto2background(data, lat=(14.18613, 30.66479), lon=(-89.33899, -79.78333), x=715, y=652, resolution=0.25):
+    downsampled_lats = np.arange(lat[0], lat[1], resolution)
+    downsampled_lons = np.arange(lon[0], lon[1], resolution)
+    upsampled_lats = np.linspace(lat[0], lat[1], y)
+    upsampled_lons = np.linspace(lon[0], lon[1], x)
 
-def groundto2background(data, lat, lon, resolution=0.25):
-    upsampled_lats = np.arange(lat.min(), lat.max(), resolution)
-    upsampled_lons = np.arange(lon.min(), lon.max(), resolution)
+    ds = xr.Dataset({'ssh': (['latitude', 'longitude'], data)},
+                    coords={'latitude': ('latitude', upsampled_lats),
+                            'longitude': ('longitude', upsampled_lons)})
+    ds = ds.interp(
+        latitude=downsampled_lats, 
+        longitude=downsampled_lons, 
+        method='linear').interp(
+            latitude=upsampled_lats, 
+            longitude=upsampled_lons, 
+            method='linear')
     
-    return upsampled_lats, upsampled_lons
-
+    return ds.ssh.data
 # %%
-import data_loader.data_loaders as module_data
-import json
+victim_file = '/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/example_0001.nc'
+ds = xr.open_mfdataset(victim_file, backend_kwargs={'format': 'netcdf4'})
+display(ds)
+lat_bounds = (ds.latitude.data[0], ds.latitude.data[-3])
+lon_bounds = (ds.longitude.data[0], ds.longitude.data[-4])
+y, x = ds.ssh.shape
+print(y, x)
+print(lat_bounds, lon_bounds)
 
-with open('config.json', 'r') as f:
-    config = json.load(f)
-
-logger = config.get_logger('test')
-
-# setup data_loader instances
-def main(config):
-    logger = config.get_logger('test')
-
-    # setup data_loader instances
-    data_loader = getattr(module_data, config['data_loader']['type'])(
-        config['data_loader']['args']['data_dir'],
-        batch_size=config['data_loader']['args']['batch_size'],
-        shuffle=False,
-        validation_split=0.0,
-        training=False,
-        num_workers=config['data_loader']['args']['num_workers'],
-        previous_days=config['data_loader']['args']['previous_days'],
-        dataset_type=config['data_loader']['args']['dataset_type'],
-        demo=True
-    )
-
-    # Read the lats and lons from 
-    lats = data_loader.dataset.lats
-    lons = data_loader.dataset.lons
-    print(lats.shape, lons.shape)
-
-# %%
-main(config)
+background_field = groundto2background(ds.ssh.data, lat_bounds, lon_bounds, x, y)
+fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+ax[0].pcolormesh(ds.ssh.data, cmap=cmo.cm.balance)
+ax[1].pcolormesh(background_field, cmap=cmo.cm.balance)
+plt.show()
 
 # %%
