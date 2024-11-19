@@ -96,7 +96,8 @@ def groundto2background(data, lat=(14.18613, 30.66479), lon=(-89.33899, -79.7833
             latitude=upsampled_lats, 
             longitude=upsampled_lons, 
             method='linear')
-    
+    ## Make 0 where the data is nan
+    ds.ssh.data = np.where(np.isnan(ds.ssh.data), 0, ds.ssh.data)
     return ds.ssh.data
 # %%
 victim_file = '/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/example_0001.nc'

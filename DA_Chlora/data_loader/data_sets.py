@@ -43,7 +43,8 @@ def scale_data_dataset(data, scalers, name, training=True):
     return scaled_data, scalers
 
 # %% Simulate DUACs background field
-def groundto2background(data, lat=(14.18613, 30.61901), lon=(-89.33899, -78.666664), x=712, y=648, resolution=0.25):
+def groundto2background(data, lat=(14.18613, 30.61901), lon=(-89.33899, -78.666664), 
+                        x=712, y=648, resolution=0.25):
     downsampled_lats = np.arange(lat[0], lat[1], resolution)
     downsampled_lons = np.arange(lon[0], lon[1], resolution)
     upsampled_lats = np.linspace(lat[0], lat[1], y)
@@ -59,7 +60,7 @@ def groundto2background(data, lat=(14.18613, 30.61901), lon=(-89.33899, -78.6666
             latitude=upsampled_lats, 
             longitude=upsampled_lons, 
             method='linear')
-    
+    ds.ssh.data = np.where(np.isnan(ds.ssh.data), 0, ds.ssh.data)
     return ds.ssh.data
 
 class SimSatelliteDataset:
