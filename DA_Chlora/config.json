@@ -3,7 +3,7 @@
     "_name": "UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset_low_noise",
     "_name": "Extended_dataset_low_noise_loss_gradient",
     "_name": "Extended_dataset_low_noise_gradient_only_in_loss",
-    "name": "Debug_model_gradient_mode_full_dataset_restored",
+    "name": "Gradient_model_gradient_mode_full_smoothed_SSH",
 
     "n_gpu": 4,
     "dataset_type_opts": ["regular", "extended", "gradient"],

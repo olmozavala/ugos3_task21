@@ -1,7 +1,7 @@
 # For testing the dataset
 import sys
 #sys.path.append("/unity/f1/ozavala/CODE/ugos3_task21/DA_Chlora") # Only for testing purposes
-sys.path.append("/home/jevz/github/ugos3_task21/DA_Chlora") # Only for testing purposes
+sys.path.append("/unity/g2/jvelasco/github/ugos3_task21/DA_Chlora") # Only for testing purposes
 import os
 import pickle
 import numpy as np
