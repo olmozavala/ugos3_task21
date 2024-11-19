@@ -186,6 +186,7 @@ class SimSatelliteDataset:
         # Replace all the nan values in X and Y with 0s
         self.X = np.where(np.isnan(self.X), 0, self.X)
         self.Y = np.where(np.isnan(self.Y), 0, self.Y)
+        self.Y_aux = self.Y.copy()
 
         #  Make tensors
         self.X = torch.tensor(self.X, dtype=torch.float32)
@@ -274,8 +275,8 @@ class SimSatelliteDataset:
             # Add the previous two states with some noise and its gradient
             # X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise_ssh
             # X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise_ssh
-            X_with_mask[-2, :, :] = groundto2background(self.Y[index-1, :, :]) 
-            X_with_mask[-3, :, :] = groundto2background(self.Y[index-2, :, :]) 
+            X_with_mask[-2, :, :] = groundto2background(self.Y_aux[index-1, :, :]) 
+            X_with_mask[-3, :, :] = groundto2background(self.Y_aux[index-2, :, :]) 
 
 
 
