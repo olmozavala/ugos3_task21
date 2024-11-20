@@ -17,8 +17,6 @@ import numpy as np
 from data_loader.loader_utils import plot_predictions
 import xarray as xr
 
-import torch._dynamo
-torch._dynamo.config.suppress_errors = True
 # %%
 
 def main(config):
@@ -71,16 +69,17 @@ def main(config):
     loss_fn = getattr(module_loss, config['loss'])
     metric_fns = [getattr(module_metric, met) for met in config['metrics']]
 
-    # Load weights
-    logger.info('Loading checkpoint: {} ...'.format(weights_file))
-    checkpoint = torch.load(weights_file)
-    state_dict = checkpoint['state_dict']
-
     device, device_ids = prepare_device(config['n_gpu'])
     model = model.to(device)
 
     if len(device_ids) > 1:
         model = torch.nn.DataParallel(model)
+
+     # Load weights
+    logger.info('Loading checkpoint: {} ...'.format(weights_file))
+    checkpoint = torch.load(weights_file, weights_only=True,
+                            map_location=device)
+    state_dict = checkpoint['state_dict']
 
     model = torch.compile(model)
     model.load_state_dict(state_dict)
@@ -196,7 +195,7 @@ if __name__ == '__main__':
 
 # %% Redoo RMSE plot
 # Read the RMSE from the csv file
-folder = "/unity/g2/jvelasco/ai_outs/task21_set1/testing/Debug_model_gradient_mode_full_dataset"
+folder = "/unity/g2/jvelasco/ai_outs/task21_set1/testing/Debug_Autoregressive_model_gradient_mode_full_dataset_pretrained_weights_default_losst"
 # folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation"
 file_name = join(folder, "loss.csv")
 rmse_data = np.loadtxt(file_name, delimiter=",")

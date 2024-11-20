@@ -1,6 +1,6 @@
 {
     "name": "Debug_Autoregressive_model_gradient_mode_full_dataset_pretrained_weights_default_loss",
-    "n_gpu": 3,
+    "n_gpu": 1,
     "dataset_type_opts": ["regular", "extended", "gradient"],
     "arch": {
         "type": "UNet",
@@ -61,7 +61,7 @@
         "tensorboard": true
     },
     "tester": {
-        "weights_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Debug_model_gradient_mode_full_dataset/1023_132535prevdays_7_activation_relu/",
+        "weights_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Debug_Autoregressive_model_gradient_mode_full_dataset_pretrained_weights_default_loss/1119_163406prevdays_7_activation_relu/",
         "output_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/testing"
     }
 }

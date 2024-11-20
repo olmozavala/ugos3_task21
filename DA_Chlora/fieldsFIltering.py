@@ -2,11 +2,13 @@
 import xarray as xr
 import pandas as pd
 import numpy as np
-import scipy as sp
 from glob import glob
 from os.path import join
 import matplotlib.pyplot as plt
 import cmocean as cmo
+import os
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 indir = '/Net/work/ozavala/DATA/GOFFISH/AVISO/GoM'
 files = sorted(glob(join(indir, '*.nc')))
