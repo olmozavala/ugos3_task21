@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from data_loader.loader_utils import plot_predictions
 import xarray as xr
+import pathlib
+torch.serialization.add_safe_globals([ConfigParser])
+torch.serialization.add_safe_globals([pathlib.PosixPath])
 
 # %%
 
@@ -81,8 +84,15 @@ def main(config):
                             map_location=device)
     state_dict = checkpoint['state_dict']
 
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        # Remove 'module.' prefix if it exists
+        new_key = key.replace("_orig_mod.module.", "_orig_mod.") if key.startswith("_orig_mod.module.") else key
+        new_state_dict[new_key] = value
+
     model = torch.compile(model)
-    model.load_state_dict(state_dict)
+    # Load the updated state_dict
+    model.load_state_dict(new_state_dict)
     model.eval()
 
     # OPTIMIZATION
@@ -105,6 +115,7 @@ def main(config):
 
             print(f"Batch {i} of {len(data_loader)}")
             data, target = data.to(device), target.to(device)
+            #data_step = torch.cat((data[:, :28, :, :], data[:, -3:, :, :]), dim=1)
             output = model(data)
 
             # computing loss, metrics on test set
