@@ -61,7 +61,7 @@ class Trainer(BaseTrainer):
 
             output = self.model(data)
             if self.config['arch']['args']['dataset_type'] == "gradient":
-    # Define Sobel kernels for computing gradients along x and y directions
+                # Define Sobel kernels for computing gradients along x and y directions
                 sobel_kernel_x = torch.tensor([[[-1, 0, 1],
                                                 [-2, 0, 2],
                                                 [-1, 0, 1]]], dtype=output.dtype, device=output.device)
@@ -146,7 +146,46 @@ class Trainer(BaseTrainer):
                 data, target = data.to(self.device), target.to(self.device)
 
                 output = self.model(data)
-                loss = self.criterion(output, target)
+
+                if self.config['arch']['args']['dataset_type'] == "gradient":
+                    # Define Sobel kernels for computing gradients along x and y directions
+                    sobel_kernel_x = torch.tensor([[[-1, 0, 1],
+                                                    [-2, 0, 2],
+                                                    [-1, 0, 1]]], dtype=output.dtype, device=output.device)
+
+                    sobel_kernel_y = torch.tensor([[[-1, -2, -1],
+                                                    [ 0,  0,  0],
+                                                    [ 1,  2,  1]]], dtype=output.dtype, device=output.device)
+
+                    # Reshape kernels to match the conv2d weight shape: [out_channels, in_channels, kH, kW]
+                    sobel_kernel_x = sobel_kernel_x.unsqueeze(1)  # Shape: [1, 1, 3, 3]
+                    sobel_kernel_y = sobel_kernel_y.unsqueeze(1)  # Shape: [1, 1, 3, 3]
+
+                    output = output.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
+                    target = target.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
+
+                    # Compute gradients along x and y directions using conv2d
+                    grad_output_x = F.conv2d(output, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
+                    grad_output_y = F.conv2d(output, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+
+                    # Compute gradients of the target
+                    grad_target_x = F.conv2d(target, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
+                    grad_target_y = F.conv2d(target, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+
+                    # Compute the gradient magnitude (2D norm) for each element in the batch
+                    grad_magnitude_output = torch.sqrt(grad_output_x ** 2 + grad_output_y ** 2)  # Shape: [batch_size, 1, height, width]
+                    grad_magnitude_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2)  # Shape: [batch_size, 1, height, width]
+
+                    # Normalize the gradients with mean 0 and std 1
+                    output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / grad_magnitude_output.std()
+                    target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / grad_magnitude_target.std()
+
+                
+                    output_loss = self.criterion(output, target)
+                    gradient_loss = self.criterion(output_gradient, target_gradient)
+                    loss = output_loss + gradient_loss
+                else:
+                    loss = self.criterion(output, target)
 
                 self.writer.set_step((epoch - 1) * len(self.valid_data_loader) + batch_idx, 'valid')
                 self.valid_metrics.update('loss', loss.item())
