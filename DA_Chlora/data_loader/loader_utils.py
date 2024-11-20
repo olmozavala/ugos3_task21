@@ -147,7 +147,7 @@ def plot_single_batch_element(X, Y, input_names, days_before, output_file, lats,
                 cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
         # Plot the true gradient of SSH in the second to last row of the second to last column
         vmax_gradient = 0.05 #1
-        vmin_gradient = -vmax_gradient
+        vmin_gradient = 0.0 #-vmax_gradient
         gdx, gdy = np.gradient(Y)
         y_gradient = np.sqrt(gdx**2 + gdy**2)
         general_plot(fig, axs[-2, -2], y_gradient, lats, lons, "True Gradient of SSH", 
@@ -164,18 +164,22 @@ def plot_single_batch_element(X, Y, input_names, days_before, output_file, lats,
     
     elif dataset_type == "gradient":
         vmax_gradient = 0.05 #1
-        vmin_gradient = -vmax_gradient
+        vmin_gradient = 0.0 #-vmax_gradient
         # Plot the previous ssh + noise
         general_plot(fig, axs[0, -1], X[-2, :, :], lats, lons, "Previous SSH + noise", 
                       cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
         # Plot the previous gradient of ssh + noise
-        general_plot(fig, axs[1, -1], X[-2, :, :], lats, lons, "Previous Gradient of SSH + noise", 
+        gdx, gdy = np.gradient(X[-2, :, :])
+        y_gradient0 = np.sqrt(gdx**2 + gdy**2)
+        general_plot(fig, axs[1, -1], y_gradient0, lats, lons, "Previous Gradient of SSH + noise", 
                       cmap=cmo.cm.balance, vmin=vmin_gradient, vmax=vmax_gradient, proj=proj, fraction=fraction, pad=pad)
         # Plot the two steps before ssh + noise
         general_plot(fig, axs[2, -1], X[-3, :, :], lats, lons, "Two steps before SSH + noise", 
                       cmap=cmo.cm.balance, vmin=None, vmax=None, proj=proj, fraction=fraction, pad=pad)
         # Plot the two steps before gradient of ssh + noise
-        general_plot(fig, axs[3, -1], X[-3, :, :], lats, lons, "Two steps before Gradient of SSH + noise", 
+        gdx, gdy = np.gradient(X[-3, :, :])
+        y_gradient1 = np.sqrt(gdx**2 + gdy**2)
+        general_plot(fig, axs[3, -1], y_gradient1, lats, lons, "Two steps before Gradient of SSH + noise", 
                       cmap=cmo.cm.balance, vmin=vmin_gradient, vmax=vmax_gradient, proj=proj, fraction=fraction, pad=pad)
        
     else:

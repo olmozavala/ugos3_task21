@@ -1,5 +1,5 @@
 {
-    "name": "Debug_Autoregressive_model_gradient_mode_full_dataset_pretrained_weights",
+    "name": "Debug_Autoregressive_model_gradient_mode_full_dataset_pretrained_weights_default_loss",
     "n_gpu": 3,
     "dataset_type_opts": ["regular", "extended", "gradient"],
     "arch": {

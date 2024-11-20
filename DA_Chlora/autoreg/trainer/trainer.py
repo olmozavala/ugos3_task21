@@ -182,20 +182,59 @@ class TrainerAutoregressive(BaseTrainer):
                 data, target = data.to(self.device), target.to(self.device)
 
                 loss = 0
-                ii = 0  # This is the index for the previous predictions
+                ii = 1  # This is the index for the previous predictions
                 sday = 4 # One day includes 4 channels (chlora, sst, altimeter, swot)
                 dc = 7 * sday # For now is hardcoded to 7 previous days and 4 channels (chlora, sst, altimeter, swot)
 
-                ss = 0
-                for ii in range(0, 2):
-                    # Insert the previous predictions into the data
-                    if ii > 0:
-                        data[:, -3, :, :] = data[:, -2, :, :].clone()
-                        data[:, -2, :, :] = output
-                    # Concatenate the batch to advance the predictions
-                    data_step = torch.cat((data[:, ss:(ss+dc), :, :], data[:, -3:, :, :]), dim=1)
-                    output = self.model(data_step)
-                    loss += self.criterion(output, target)/2
+                ss = 4
+                #for ii in range(0, 2):
+                #    # Insert the previous predictions into the data
+                #    if ii > 0:
+                #        data[:, -3, :, :] = data[:, -2, :, :].clone()
+                #        data[:, -2, :, :] = output
+                #    # Concatenate the batch to advance the predictions
+                #    data_step = torch.cat((data[:, ss:(ss+dc), :, :], data[:, -3:, :, :]), dim=1)
+                #    output = self.model(data_step)
+                #    loss += self.criterion(output, target)/2
+
+                # We are validating only the last prediction
+                data_step = torch.cat((data[:, ss:(ss+dc), :, :], data[:, -3:, :, :]), dim=1)
+                output = self.model(data_step)
+
+                sobel_kernel_x = torch.tensor([[[-1, 0, 1],
+                                                [-2, 0, 2],
+                                                [-1, 0, 1]]], dtype=output.dtype, device=output.device)
+
+                sobel_kernel_y = torch.tensor([[[-1, -2, -1],
+                                                [ 0,  0,  0],
+                                                [ 1,  2,  1]]], dtype=output.dtype, device=output.device)
+
+                # Reshape kernels to match the conv2d weight shape: [out_channels, in_channels, kH, kW]
+                sobel_kernel_x = sobel_kernel_x.unsqueeze(1)  # Shape: [1, 1, 3, 3]
+                sobel_kernel_y = sobel_kernel_y.unsqueeze(1)  # Shape: [1, 1, 3, 3]
+                output = output.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
+
+                grad_output_x = F.conv2d(output, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
+                grad_output_y = F.conv2d(output, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+
+                # Compute gradients of the target
+                grad_target_x = F.conv2d(target[:,ii,:,:].unsqueeze(1), sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
+                grad_target_y = F.conv2d(target[:,ii,:,:].unsqueeze(1), sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+
+                # Compute the gradient magnitude (2D norm) for each element in the batch
+                grad_magnitude_output = torch.sqrt(grad_output_x ** 2 + grad_output_y ** 2)  # Shape: [batch_size, 1, height, width]
+                grad_magnitude_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2)  # Shape: [batch_size, 1, height, width]
+
+                # Normalize the gradients with mean 0 and std 1
+                output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / grad_magnitude_output.std()
+                target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / grad_magnitude_target.std()
+
+                # End of the loop for the previous predictions and computing the loss
+                output_loss = self.criterion(output, target[:,ii,:,:])
+                gradient_loss = self.criterion(output_gradient, target_gradient)
+                loss = (output_loss + gradient_loss)
+                # We are validating only the final prediction   
+                #loss = self.criterion(output, target[:,1,:,:])
 
                 self.writer.set_step((epoch - 1) * len(self.valid_data_loader) + batch_idx, 'valid')
                 self.valid_metrics.update('loss', loss.item())

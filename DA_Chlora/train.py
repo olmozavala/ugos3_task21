@@ -12,8 +12,8 @@ from trainer import Trainer
 from utils import prepare_device
 
 # Only for jvelasco (toch has some problems to compile models)
-import torch._dynamo
-torch._dynamo.config.suppress_errors = True
+#import torch._dynamo
+#torch._dynamo.config.suppress_errors = True
 
 # fix random seeds for reproducibility
 SEED = 123
@@ -52,7 +52,6 @@ logger.info(model)
 
 # prepare for (multi-device) GPU training
 device, device_ids = prepare_device(config['n_gpu'])
-print(device_ids)
 model = model.to(device)
 
 if len(device_ids) > 1:
