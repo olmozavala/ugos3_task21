@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from base import BaseTrainer
 from utils import inf_loop, MetricTracker
 
-
 class Trainer(BaseTrainer):
     """
     Trainer class
@@ -60,6 +59,7 @@ class Trainer(BaseTrainer):
             # I hardcoded the device type to cuda because I was getting an error when it tried to run on the CPU
 
             output = self.model(data)
+            np.save(f"/unity/g2/jvelasco/ai_outs/debug/output_randn_{batch_idx}.npy", output.detach().cpu().numpy())
             if self.config['arch']['args']['dataset_type'] == "gradient":
                 # Define Sobel kernels for computing gradients along x and y directions
                 sobel_kernel_x = torch.tensor([[[-1, 0, 1],
@@ -92,13 +92,31 @@ class Trainer(BaseTrainer):
                 # Normalize the gradients with mean 0 and std 1
                 output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / grad_magnitude_output.std()
                 target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / grad_magnitude_target.std()
-
                 # For debugging purposes plot one of the gradients
                 # import matplotlib.pyplot as plt
                 # plt.imshow(target_gradient[0, 0, :, :].cpu().numpy(), vmin=0, vmax=2)
                 # plt.colorbar()
-                # plt.savefig("target_gradient.png")
+                # plt.savefig(f"/unity/g2/jvelasco/ai_outs/debug/target_gradient_{batch_idx}.png")
                 # plt.close()
+                # Plot all the data in the model
+                #import matplotlib.pyplot as plt
+                #from mpl_toolkits.axes_grid1 import ImageGrid
+                #import cmocean as cmo
+                #fig = plt.figure(figsize=(10., 20.), dpi=300)
+                #grid = ImageGrid(fig, 111,  # similar to subplot(111)
+                #                nrows_ncols=(9, 4),  # creates 1x2 grid of axes
+                #                axes_pad=0.1,  # pad between axes in inches
+                #                )
+                #for i in range(data.shape[1]):
+                #    grid[i].imshow(data[0, i, :, :].detach().cpu().numpy(), cmap=cmo.cm.haline)
+                # Last four axes are for the target and the output and their gradients
+                #grid[-4].imshow(target[0, 0, :, :].detach().cpu().numpy(), cmap=cmo.cm.balance)
+                #grid[-3].imshow(output[0, 0, :, :].detach().cpu().numpy(), cmap=cmo.cm.balance)
+                #grid[-2].imshow(target_gradient[0, 0, :, :].detach().cpu().numpy(), cmap=cmo.cm.balance)
+                #grid[-1].imshow(output_gradient[0, 0, :, :].detach().cpu().numpy(), cmap=cmo.cm.balance)
+                #plt.savefig(f"/unity/g2/jvelasco/ai_outs/debug/input_output_hanning_{batch_idx}.png")
+                #plt.close()
+
                 output_loss = self.criterion(output, target)
                 gradient_loss = self.criterion(output_gradient, target_gradient)
                 loss = output_loss + gradient_loss

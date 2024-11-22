@@ -1,4 +1,6 @@
 # %%
+import sys
+sys.path.append("/unity/g2/jvelasco/github/ugos3_task21/DA_Chlora") # Only for testing purposes
 import argparse
 import collections
 import torch
@@ -10,6 +12,7 @@ import model.model as module_arch
 from parse_config import ConfigParser
 from trainer import Trainer
 from utils import prepare_device
+
 
 # Only for jvelasco (toch has some problems to compile models)
 #import torch._dynamo

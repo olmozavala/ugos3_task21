@@ -63,6 +63,60 @@ def groundto2background(data, lat=(14.18613, 30.61901), lon=(-89.33899, -78.6666
     ds.ssh.data = np.where(np.isnan(ds.ssh.data), 0, ds.ssh.data)
     return ds.ssh.data
 
+def gaussian_kernel(size: int, sigma: float):
+    """Creates a 2D Gaussian kernel."""
+    x = torch.arange(size) - size // 2
+    x = x.repeat(size, 1)
+    y = x.T
+    kernel = torch.exp(-(x**2 + y**2) / (2 * sigma**2))
+    return kernel / kernel.sum()
+
+def low_pass_filter(tensor, kernel_size=7, sigma=5):
+    """Applies a Gaussian low-pass filter to a 2D tensor."""
+    tensor = torch.tensor(tensor, dtype=torch.float32)
+    # Create Gaussian kernel
+    kernel = gaussian_kernel(kernel_size, sigma)
+    kernel = kernel.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+    
+    # Apply convolution
+    tensor = tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+    filtered_tensor = torch.nn.functional.conv2d(tensor, kernel, padding=kernel_size//2)
+    # Remove nan values in case there are any
+    filtered_tensor = torch.where(torch.isnan(filtered_tensor), torch.tensor(0, dtype=filtered_tensor.dtype, device=filtered_tensor.device), filtered_tensor)
+    return filtered_tensor.squeeze()
+
+def high_pass_filter(tensor, kernel_size=7, sigma=5.0):
+    """Applies a high-pass filter to a 2D tensor."""
+    tensor = torch.tensor(tensor, dtype=torch.float32)
+    # Create Gaussian kernel
+    kernel = gaussian_kernel(kernel_size, sigma)
+    kernel = kernel.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+    
+    # Apply low-pass filter using convolution
+    tensor = tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+    low_pass = torch.nn.functional.conv2d(tensor, kernel, padding=kernel_size//2)
+    
+    # Subtract low-pass filtered version from the original to get high-pass
+    high_pass = tensor - low_pass
+    # Remove nan values in case there are any
+    high_pass = torch.where(torch.isnan(high_pass), torch.tensor(0, dtype=high_pass.dtype, device=high_pass.device), high_pass)
+    return high_pass.squeeze()  # Remove batch and channel dimensions
+
+def hanning_filterold(tensor, pass_size=30):
+    """Applies a Hanning filter to a 2D tensor."""
+    return tensor
+    tensor = torch.tensor(tensor, dtype=torch.float32)
+    kernel = torch.tensor([[0, 0.125, 0],
+                            [0.125,  0.5,  0.125],
+                            [ 0,  0.125, 0]], dtype=torch.float32)
+    kernel = kernel.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+    tensor = tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+    for ii in range(pass_size):
+        tensor = torch.nn.functional.conv2d(tensor, kernel, padding=3//2)
+    # Remove nan values in case there are any
+    tensor = torch.where(torch.isnan(tensor), torch.tensor(0, dtype=tensor.dtype, device=tensor.device), tensor)
+    return tensor.squeeze()
+
 class SimSatelliteDataset:
     # Total 1758*2 = 3516 training examples
     # 10% validation split -> 351 examples
@@ -84,11 +138,12 @@ class SimSatelliteDataset:
         scalers_file = "scalers.pkl"
         # DO not delete this section it is used to select the input dataset as the computation takes some time 
         if training:
-            pkl_file = "training.pkl"
+            # pkl_file = "training.pkl"
             # pkl_file = "training_full.pkl"
-            # pkl_file = "training_small.pkl"
+            pkl_file = "training_small.pkl"
         else:
-            pkl_file = "validation.pkl"
+            # pkl_file = "validation.pkl"
+            pkl_file = "training_small.pkl"
 
         # Verify if 'training.pkl' file exists
         training_pkl_path = join(data_dir, pkl_file)
@@ -243,6 +298,22 @@ class SimSatelliteDataset:
         return self.length
 
     def __getitem__(self, index):
+
+        def hanning_filter(tensor, pass_size=30):
+            return tensor
+            """Applies a Hanning filter to a 2D tensor."""
+            tensor = torch.tensor(tensor, dtype=torch.float32)
+            kernel = torch.tensor([[0, 0.125, 0],
+                                    [0.125,  0.5,  0.125],
+                                    [ 0,  0.125, 0]], dtype=torch.float32)
+            kernel = kernel.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+            tensor = tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+            for ii in range(pass_size):
+                tensor = torch.nn.functional.conv2d(tensor, kernel, padding=3//2)
+            # Remove nan values in case there are any
+            tensor = torch.where(torch.isnan(tensor), torch.tensor(0, dtype=tensor.dtype, device=tensor.device), tensor)
+            return tensor.squeeze()
+
         # Append the Gulf Mask to the X array
         if index <= self.previous_days:
             index = self.previous_days + 1
@@ -256,10 +327,10 @@ class SimSatelliteDataset:
             start_index = i * size_per_day
             end_idx = (i * size_per_day) + size_per_day
             # print(f"start_index: {start_index}, end_idx: {end_idx}. Index: {index - self.previous_days + i + 1}. Original index: {index}")
-            X_with_mask[start_index : end_idx, :, :] = self.X[index - self.previous_days + i + 1, :, :, :]
+            X_with_mask[start_index : end_idx, :, :] = self.X[index - self.previous_days + i + 1, :, :, :].numpy()
         
         # Add the Gulf Mask as the last channel
-        X_with_mask[-1, :, :] = self.gulf_mask
+        X_with_mask[-1, :, :] = self.gulf_mask.numpy()
 
         if self.dataset_type == "extended":
             noise_level = 0.5  # Default is 0.5 low is 0.1
@@ -269,25 +340,48 @@ class SimSatelliteDataset:
             X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise
 
         if self.dataset_type == "gradient":
-            noise_level_ssh = 0.2
+            noise_level_ssh = 0.001
             noise_ssh = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level_ssh
             # Add the previous two states with some noise and its gradient
-            X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise_ssh
-            X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise_ssh
-            #X_with_mask[-2, :, :] = torch.tensor(groundto2background(self.Y[index-1, :, :].clone()).copy(), dtype=torch.float32)
-            #X_with_mask[-3, :, :] = torch.tensor(groundto2background(self.Y[index-2, :, :].clone()).copy(), dtype=torch.float32)
+            # SI NO FUNCIONA, NO ES EL DTYPE SON LOS VALORES DE Y. QUE CAMBIA CUANDO AGREGO EL NOISE?
+            X_with_mask[-2, :, :] = self.Y[index-1, :, :].numpy().astype(np.float64) + noise_ssh
+            X_with_mask[-3, :, :] = self.Y[index-2, :, :].numpy().astype(np.float64) + noise_ssh
+            # Upsample downsample technique
+            # X_with_mask[-2, :, :] = groundto2background(self.Y[index-1, :, :].numpy())
+            # X_with_mask[-3, :, :] = groundto2background(self.Y[index-2, :, :].numpy())
+            # Hanning filter
+            #X_with_mask[-2, :, :] = hanning_filter(groundto2background(self.Y[index-1, :, :].numpy()), pass_size=100).numpy()
+            #X_with_mask[-3, :, :] = hanning_filter(groundto2background(self.Y[index-2, :, :]), pass_size=100).numpy()
+            X_with_mask[-2, :, :] = hanning_filter(self.Y[index-1, :, :].numpy(), pass_size=100) + noise_ssh
+            X_with_mask[-3, :, :] = hanning_filter(self.Y[index-2, :, :].numpy(), pass_size=100) + noise_ssh
+            #X_with_mask[-2, :, :] = noise_ssh
+            #X_with_mask[-3, :, :] = noise_ssh
+            # Upsampling and downsampling technique + low-pass filter
+            # X_with_mask[-2, :, :] = low_pass_filter(groundto2background(self.Y[index-1, :, :].numpy()), kernel_size=9, sigma=5).numpy()
+            # X_with_mask[-3, :, :] = low_pass_filter(groundto2background(self.Y[index-2, :, :].numpy()), kernel_size=9, sigma=5).numpy()
+            # Direct low-pass filter
+            # X_with_mask[-2, :, :] = low_pass_filter(self.Y[index-1, :, :].numpy(), kernel_size=11, sigma=5)
+            # X_with_mask[-3, :, :] = low_pass_filter(self.Y[index-2, :, :].numpy(), kernel_size=11, sigma=5)
+            # High pass filter
+            #X_with_mask[-2, :, :] = hanning_filter(high_pass_filter(self.Y[index-1, :, :].numpy(), kernel_size=11, sigma=5).numpy(), pass_size=30)
+            #X_with_mask[-3, :, :] = hanning_filter(high_pass_filter(self.Y[index-2, :, :].numpy(), kernel_size=11, sigma=5).numpy(), pass_size=30)
 
 
 
         # Only for testing purposes plot the input data
         if self.plot_data:
+            # plot batch metrics
+            print('X mean: ', np.mean(X_with_mask), 'X std: ', np.std(X_with_mask))
+            # print metrics for X[-2] and X[-3]
+            print('X[-2] mean: ', np.mean(X_with_mask[-2]), 'X[-2] std: ', np.std(X_with_mask[-2]))
+            print('X[-3] mean: ', np.mean(X_with_mask[-3]), 'X[-3] std: ', np.std(X_with_mask[-3]))
             input_names = ["sst", "chlora", "ssh_track", "swot"]
             plot_single_batch_element(X_with_mask, self.Y[index], input_names, self.previous_days, 
                                       #f"/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/batch_example_{index}.jpg",
                                       f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_example_{index}.jpg",
                                       self.lats, self.lons, dataset_type=self.dataset_type)
 
-        return X_with_mask, self.Y[index]
+        return torch.tensor(X_with_mask, dtype=torch.float32), self.Y[index]
 
     def get_scaler(self):
         return self.scaler
@@ -303,7 +397,7 @@ if __name__ == "__main__":
 # Main function to test the dataset
     data_dir = "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"
     batch_size = 1
-    training = False
+    training = True
     plot_data = True
     previous_days = 7
     dataset_type = "gradient"
@@ -315,12 +409,32 @@ if __name__ == "__main__":
 
     # Create a data loader for the dataset
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-#
+
+    x_means = 0
+    x_means_2 = 0
+    x_means_3 = 0
+    x_stds = 0
+    x_stds_2 = 0
+    x_stds_3 = 0
     # Iterate over the data loader
     for batch_idx, (x, y) in enumerate(data_loader):
         # Print the batch index and the batch size
+        #x = x.numpy()
+        #y = y.numpy()
+        #x_means += np.mean(x[:,:-1]) # Excluding the last channel which is the Gulf Mask
+        #x_stds += np.std(x[:,:-1])
+        #x_means_2 += np.mean(x[:,-2])
+        #x_means_3 += np.mean(x[:,-3])
+        #x_stds_2 += np.std(x[:,-2])
+        #x_stds_3 += np.std(x[:,-3])
+        #print('X mean: ', np.mean(x[:,:-1]), 'X std: ', np.std(x[:,:-1]))
+        #print('X[-2] mean: ', np.mean(x[:,-2]), 'X[-2] std: ', np.std(x[:,-2]))
+        #print('X[-3] mean: ', np.mean(x[:,-3]), 'X[-3] std: ', np.std(x[:,-3]))
         print(f"Batch {batch_idx}: x.shape = {x.shape}, y.shape = {y.shape}")
         if batch_idx > 0:
             break
-
+    #print("X Batch means: ", x_means, "X Batch stds: ", x_stds)
+    #print("X[-2] Batch means: ", x_means_2, "X[-2] Batch stds: ", x_stds_2)
+    #print("X[-3] Batch means: ", x_means_3, "X[-3] Batch stds: ", x_stds_3)
     print("Done!")
+    
