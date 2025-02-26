@@ -69,7 +69,7 @@
         "weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation/0927_084025prevdays_7_activation_relu",
         "_weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/logs/Extended_dataset_low_noise_loss_gradient/0928_222938prevdays_7_activation_relu",
         "_weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/Extended_dataset_low_noise_gradient_only_in_loss/0929_105200prevdays_7_activation_relu/",
-        "weights_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Debug_model_gradient_mode_full_dataset/1023_132535prevdays_7_activation_relu/",
+        "weights_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Gradient_model_smooth_fields_wmask/0225_202455prevdays_7_activation_relu/",
         "output_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/testing"
     }
 }

@@ -16,6 +16,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from data_loader.loader_utils import plot_predictions
 import xarray as xr
+
+# Only for jvelasco (toch has some problems to compile models)
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
 # %%
 
 def main(config):
