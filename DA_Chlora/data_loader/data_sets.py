@@ -274,8 +274,8 @@ class SimSatelliteDataset:
             # Add the previous two states with some noise and its gradient
             X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise_ssh
             X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise_ssh
-            #X_with_mask[-2, :, :] = torch.tensor(groundto2background(self.Y[index-1, :, :].clone()).copy(), dtype=torch.float32)
-            #X_with_mask[-3, :, :] = torch.tensor(groundto2background(self.Y[index-2, :, :].clone()).copy(), dtype=torch.float32)
+            # X_with_mask[-2, :, :] = torch.tensor(groundto2background(self.Y[index-1, :, :].clone()).copy(), dtype=torch.float32)
+            # X_with_mask[-3, :, :] = torch.tensor(groundto2background(self.Y[index-2, :, :].clone()).copy(), dtype=torch.float32)
 
 
 

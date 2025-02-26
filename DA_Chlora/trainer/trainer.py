@@ -60,6 +60,10 @@ class Trainer(BaseTrainer):
             # I hardcoded the device type to cuda because I was getting an error when it tried to run on the CPU
 
             output = self.model(data)
+            # Create a mask for the valid points
+            mask = data[0, -1, :, :]
+            valid_points = torch.sum(mask) + 1e-8
+
             if self.config['arch']['args']['dataset_type'] == "gradient":
                 # Define Sobel kernels for computing gradients along x and y directions
                 sobel_kernel_x = torch.tensor([[[-1, 0, 1],
@@ -99,13 +103,17 @@ class Trainer(BaseTrainer):
                 # plt.colorbar()
                 # plt.savefig("target_gradient.png")
                 # plt.close()
-                output_loss = self.criterion(output, target)
-                gradient_loss = self.criterion(output_gradient, target_gradient)
-                loss = output_loss + gradient_loss
+                output_loss = self.criterion(output * mask, target) 
+                gradient_loss = self.criterion(output_gradient * mask, target_gradient)
+                loss = (output_loss + gradient_loss) / (2 * valid_points)
             else:
-                loss = self.criterion(output, target)
+                loss = self.criterion(output * mask, target * mask) / valid_points
 
             loss.backward()
+            
+            # Clip gradients to prevent exploding gradients
+            # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.01, norm_type=1)
+
             self.optimizer.step()
 
             self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
@@ -146,6 +154,8 @@ class Trainer(BaseTrainer):
                 data, target = data.to(self.device), target.to(self.device)
 
                 output = self.model(data)
+                mask = data[0, -1, :, :]
+                valid_points = torch.sum(mask) + 1e-8
 
                 if self.config['arch']['args']['dataset_type'] == "gradient":
                     # Define Sobel kernels for computing gradients along x and y directions
@@ -177,15 +187,15 @@ class Trainer(BaseTrainer):
                     grad_magnitude_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2)  # Shape: [batch_size, 1, height, width]
 
                     # Normalize the gradients with mean 0 and std 1
-                    output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / grad_magnitude_output.std()
-                    target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / grad_magnitude_target.std()
+                    output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / (grad_magnitude_output.std())
+                    target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / (grad_magnitude_target.std())
 
                 
-                    output_loss = self.criterion(output, target)
-                    gradient_loss = self.criterion(output_gradient, target_gradient)
-                    loss = output_loss + gradient_loss
+                    output_loss = self.criterion(output * mask, target) 
+                    gradient_loss = self.criterion(output_gradient * mask, target_gradient)
+                    loss = (output_loss + gradient_loss) / (2 * valid_points)
                 else:
-                    loss = self.criterion(output, target)
+                    loss = self.criterion(output * mask, target * mask) / valid_points
 
                 self.writer.set_step((epoch - 1) * len(self.valid_data_loader) + batch_idx, 'valid')
                 self.valid_metrics.update('loss', loss.item())

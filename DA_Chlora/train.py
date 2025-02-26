@@ -12,8 +12,8 @@ from trainer import Trainer
 from utils import prepare_device
 
 # Only for jvelasco (toch has some problems to compile models)
-#import torch._dynamo
-#torch._dynamo.config.suppress_errors = True
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
 
 # fix random seeds for reproducibility
 SEED = 123
