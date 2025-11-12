@@ -1,9 +1,5 @@
 {
-    "_name": "UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation_full_dataset",
-    "_name": "UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset_low_noise",
-    "_name": "Extended_dataset_low_noise_loss_gradient",
-    "_name": "Extended_dataset_low_noise_gradient_only_in_loss",
-    "name": "Gradient_model_smooth_fields_wmask",
+    "name": "Gradient_model_rnoise_fields_nochlora",
 
     "n_gpu": 4,
     "dataset_type_opts": ["regular", "extended", "gradient"],
@@ -11,7 +7,7 @@
         "type": "UNet",
         "args": {
             "previous_days": 7, 
-            "in_channels": 4,
+            "in_channels": 3,
             "start_filters": 32,
             "num_levels": 4,
             "kernel_size": 3,
@@ -27,7 +23,7 @@
         "type": "DefaultDataLoader",
         "args":{
             "data_dir": "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/",
-            "batch_size": 60,
+            "batch_size": 96,
             "shuffle": true,
             "validation_split": 0.1,
             "num_workers": 10,
@@ -53,7 +49,7 @@
         }
     },
     "trainer": {
-        "epochs": 100,
+        "epochs": 500,
 
         "save_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/training",
         "save_period": 1,
@@ -65,11 +61,8 @@
         "tensorboard": true
     },
     "tester": {
-        "_weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset/0927_194001prevdays_7_activation_relu",
-        "weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation/0927_084025prevdays_7_activation_relu",
-        "_weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/logs/Extended_dataset_low_noise_loss_gradient/0928_222938prevdays_7_activation_relu",
-        "_weights_dir": "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/models/Extended_dataset_low_noise_gradient_only_in_loss/0929_105200prevdays_7_activation_relu/",
-        "weights_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Gradient_model_smooth_fields_wmask/0225_202455prevdays_7_activation_relu/",
+
+        "weights_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Gradient_model_rnoise_fields_nochlora/1109_220754prevdays_7_activation_relu/",
         "output_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/testing"
     }
 }

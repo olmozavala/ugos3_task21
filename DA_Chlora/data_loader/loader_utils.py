@@ -179,7 +179,7 @@ def plot_single_batch_element(X, Y, input_names, days_before, output_file, lats,
         # Plot the two steps before gradient of ssh + noise
         gdx, gdy = np.gradient(X[-3, :, :])
         y_gradient1 = np.sqrt(gdx**2 + gdy**2)
-        general_plot(fig, axs[3, -1], y_gradient1, lats, lons, "Two steps before Gradient of SSH + noise", 
+        general_plot(fig, axs[2, -1], y_gradient1, lats, lons, "Two steps before Gradient of SSH + noise", 
                       cmap=cmo.cm.balance, vmin=vmin_gradient, vmax=vmax_gradient, proj=proj, fraction=fraction, pad=pad)
        
     else:

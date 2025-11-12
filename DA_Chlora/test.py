@@ -74,7 +74,7 @@ def main(config):
 
     # Load weights
     logger.info('Loading checkpoint: {} ...'.format(weights_file))
-    checkpoint = torch.load(weights_file)
+    checkpoint = torch.load(weights_file, weights_only=False)
     state_dict = checkpoint['state_dict']
 
     device, device_ids = prepare_device(config['n_gpu'])
@@ -197,7 +197,7 @@ if __name__ == '__main__':
 
 # %% Redoo RMSE plot
 # Read the RMSE from the csv file
-folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset/"
+folder = "/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Gradient_model_rnoise_fields_nochlora/"
 # folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation"
 file_name = join(folder, "loss.csv")
 rmse_data = np.loadtxt(file_name, delimiter=",")

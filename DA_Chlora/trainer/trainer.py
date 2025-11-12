@@ -105,7 +105,7 @@ class Trainer(BaseTrainer):
                 # plt.close()
                 output_loss = self.criterion(output * mask, target) 
                 gradient_loss = self.criterion(output_gradient * mask, target_gradient)
-                loss = (output_loss + gradient_loss) / (2 * valid_points)
+                loss = (output_loss + gradient_loss) / (2)
             else:
                 loss = self.criterion(output * mask, target * mask) / valid_points
 
@@ -193,7 +193,7 @@ class Trainer(BaseTrainer):
                 
                     output_loss = self.criterion(output * mask, target) 
                     gradient_loss = self.criterion(output_gradient * mask, target_gradient)
-                    loss = (output_loss + gradient_loss) / (2 * valid_points)
+                    loss = (output_loss + gradient_loss) / 2
                 else:
                     loss = self.criterion(output * mask, target * mask) / valid_points
 

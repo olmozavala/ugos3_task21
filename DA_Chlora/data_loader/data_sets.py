@@ -1,7 +1,7 @@
 # For testing the dataset
 import sys
 #sys.path.append("/unity/f1/ozavala/CODE/ugos3_task21/DA_Chlora") # Only for testing purposes
-sys.path.append("/unity/g2/jvelasco/github/ugos3_task21/DA_Chlora") # Only for testing purposes
+sys.path.append("/unity/g2/jvelasco/gitraw/ugos3_task21/DA_Chlora") # Only for testing purposes
 import os
 import pickle
 import numpy as np
@@ -75,7 +75,7 @@ class SimSatelliteDataset:
         self.plot_data = plot_data
         self.dataset_type = dataset_type
         # Input variables
-        input_vars = ["sst", "chlora", "ssh_track", "swot"]
+        input_vars = ["sst", "ssh_track", "swot"]
         output_vars = ["ssh"]
         all_var_names = input_vars + output_vars
         input_normalized_vars = [f"{var}_normalized" for var in input_vars]
@@ -178,6 +178,8 @@ class SimSatelliteDataset:
             print(f"Reading {pkl_file} file...")
             with open(training_pkl_path, "rb") as f:
                 self.X, self.Y, self.lats, self.lons = pickle.load(f)
+            # Removing CHLORA from the X array
+            self.X = self.X[:, [0,2,3]]
         
         # Make a mask of the gulf of guinea
         self.gulf_mask = np.zeros_like(self.Y[0,:,:])
@@ -208,21 +210,6 @@ class SimSatelliteDataset:
             # + 5 because of the Gulf Mask, and the two previous states with some noise and the gradient (2 * 2)
             self.tot_inputs = self.X.shape[1] * self.previous_days + 3
 
-        # If the dataset is gradient, then we append a second output with the magnitude of the gradient of the ssh
-        # if dataset_type == "gradient":
-        #    print("Calculating the gradient of the SSH...")
-        #    all_grad_magitudes = []
-        #    for i in range(self.Y.shape[0]):
-        #        gradient_y, gradient_x = np.gradient(self.Y[i, :, :])
-        #        gradient_magnitude = np.sqrt(gradient_y**2 + gradient_x**2)
-        #        all_grad_magitudes.append(gradient_magnitude)
-
-        #    all_grad_magitudes = np.array(all_grad_magitudes)
-        #    # Normalize to mean 0 and std 1
-        #    all_grad_magitudes = (all_grad_magitudes - np.mean(all_grad_magitudes)) / np.std(all_grad_magitudes)
-        #    self.Y = np.stack([self.Y, all_grad_magitudes], axis=0)
-        #    # Flip the first and second dimensions in Y
-        #    self.Y = np.transpose(self.Y, (1, 0, 2, 3))
 
         # Make the mask a float32 tensor
         self.gulf_mask = torch.tensor(self.gulf_mask, dtype=torch.float32)
@@ -281,7 +268,7 @@ class SimSatelliteDataset:
 
         # Only for testing purposes plot the input data
         if self.plot_data:
-            input_names = ["sst", "chlora", "ssh_track", "swot"]
+            input_names = ["sst", "ssh_track", "swot"]
             plot_single_batch_element(X_with_mask, self.Y[index], input_names, self.previous_days, 
                                       #f"/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/batch_example_{index}.jpg",
                                       f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_example_{index}.jpg",
