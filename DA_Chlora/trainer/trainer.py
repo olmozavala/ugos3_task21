@@ -16,6 +16,8 @@ class Trainer(BaseTrainer):
         self.config = config
         self.device = device
         self.data_loader = data_loader
+        self.register_sobel_kernels()
+        self.register_curvature_kernels()
         if len_epoch is None:
             print("Epoch-based training")
             # epoch-based training
@@ -32,6 +34,35 @@ class Trainer(BaseTrainer):
 
         self.train_metrics = MetricTracker('loss', *[m.__name__ for m in self.metric_ftns], writer=self.writer)
         self.valid_metrics = MetricTracker('loss', *[m.__name__ for m in self.metric_ftns], writer=self.writer)
+    
+    def register_sobel_kernels(self):
+        sobel_x = torch.tensor([
+            [[-1, 0, 1],
+            [-2, 0, 2],
+            [-1, 0, 1]]], dtype=torch.float32)
+
+        sobel_y = torch.tensor([
+            [[-1, -2, -1],
+            [ 0,  0,  0],
+            [ 1,  2,  1]]], dtype=torch.float32)
+
+        # Reshape to [out_channels, in_channels, kH, kW]
+        self.sobel_kernel_x = sobel_x.unsqueeze(1).to(self.device)
+        self.sobel_kernel_y = sobel_y.unsqueeze(1).to(self.device)
+
+        # Make sure autograd does not track these
+        self.sobel_kernel_x.requires_grad_(False)
+        self.sobel_kernel_y.requires_grad_(False)
+
+    def register_curvature_kernels(self):
+        laplacian = torch.tensor([
+            [[ 0,  1,  0],
+            [ 1, -4,  1],
+            [ 0,  1,  0]]
+        ], dtype=torch.float32)
+
+        self.laplace_kernel = laplacian.unsqueeze(1).to(self.device)
+        self.laplace_kernel.requires_grad_(False)
 
     def _train_epoch(self, epoch):
         """
@@ -64,50 +95,54 @@ class Trainer(BaseTrainer):
             mask = data[0, -1, :, :]
             valid_points = torch.sum(mask) + 1e-8
 
-            if self.config['arch']['args']['dataset_type'] == "gradient":
-                # Define Sobel kernels for computing gradients along x and y directions
-                sobel_kernel_x = torch.tensor([[[-1, 0, 1],
-                                                [-2, 0, 2],
-                                                [-1, 0, 1]]], dtype=output.dtype, device=output.device)
+            mask = data[:, -1, :, :].unsqueeze(1)  # [B,1,H,W]
+            valid_points = mask.sum()
+            #print(f"Output shape: {output.shape}")
+            #print(f"Target shape: {target.shape}")
 
-                sobel_kernel_y = torch.tensor([[[-1, -2, -1],
-                                                [ 0,  0,  0],
-                                                [ 1,  2,  1]]], dtype=output.dtype, device=output.device)
+            eps = 1e-10
+            output = output.unsqueeze(1)  # shape [B,1,H,W]
+            # print(f"Output shape: {output.shape}")
+            # compute sobel gradients
+            grad_output_x = F.conv2d(output, self.sobel_kernel_x, padding=1)
+            grad_output_y = F.conv2d(output, self.sobel_kernel_y, padding=1)
+            grad_target_x = F.conv2d(target, self.sobel_kernel_x, padding=1)
+            grad_target_y = F.conv2d(target, self.sobel_kernel_y, padding=1)
 
-                # Reshape kernels to match the conv2d weight shape: [out_channels, in_channels, kH, kW]
-                sobel_kernel_x = sobel_kernel_x.unsqueeze(1)  # Shape: [1, 1, 3, 3]
-                sobel_kernel_y = sobel_kernel_y.unsqueeze(1)  # Shape: [1, 1, 3, 3]
+            # magnitude
+            grad_magnitude_output = torch.sqrt(grad_output_x**2 + grad_output_y**2 + eps)
+            grad_magnitude_target = torch.sqrt(grad_target_x**2 + grad_target_y**2 + eps)
 
-                output = output.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
-                target = target.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
+            # normalization (fixed)
+            output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / (grad_magnitude_output.std() + eps)
+            target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / (grad_magnitude_target.std() + eps)
 
-                # Compute gradients along x and y directions using conv2d
-                grad_output_x = F.conv2d(output, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
-                grad_output_y = F.conv2d(output, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+            # analyze curvature
+            curv_output = F.conv2d(output, self.laplace_kernel, padding=1)
+            curv_target = F.conv2d(target, self.laplace_kernel, padding=1)
 
-                # Compute gradients of the target
-                grad_target_x = F.conv2d(target, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
-                grad_target_y = F.conv2d(target, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+            curv_output_norm = (curv_output - curv_output.mean()) / (curv_output.std() + eps)
+            curv_target_norm = (curv_target - curv_target.mean()) / (curv_target.std() + eps)
 
-                # Compute the gradient magnitude (2D norm) for each element in the batch
-                grad_magnitude_output = torch.sqrt(grad_output_x ** 2 + grad_output_y ** 2)  # Shape: [batch_size, 1, height, width]
-                grad_magnitude_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2)  # Shape: [batch_size, 1, height, width]
+            curvature_loss = ((curv_output_norm - curv_target_norm)**2 * mask).sum() / valid_points
 
-                # Normalize the gradients with mean 0 and std 1
-                output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / grad_magnitude_output.std()
-                target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / grad_magnitude_target.std()
+            # pixelwise loss reduced by mask
+            output_loss = ((output - target)**2 * mask).sum() / valid_points
+            gradient_loss = ((output_gradient - target_gradient)**2 * mask).sum() / valid_points
 
-                # For debugging purposes plot one of the gradients
-                # import matplotlib.pyplot as plt
-                # plt.imshow(target_gradient[0, 0, :, :].cpu().numpy(), vmin=0, vmax=2)
-                # plt.colorbar()
-                # plt.savefig("target_gradient.png")
-                # plt.close()
-                output_loss = self.criterion(output * mask, target) 
-                gradient_loss = self.criterion(output_gradient * mask, target_gradient)
-                loss = (output_loss + gradient_loss) / (2)
-            else:
-                loss = self.criterion(output * mask, target * mask) / valid_points
+            w_curvature = 0.05
+            w_gradient = 0.1
+            w_output = 1.0
+            # print(f"Output loss: {output_loss}, Gradient loss: {gradient_loss}")
+            loss = (output_loss * w_output + gradient_loss * w_gradient + curvature_loss * w_curvature) / (w_output + w_gradient + w_curvature + eps)
+            #loss = output_loss / valid_points
+            # If loss is nan, kill the process
+            if torch.isnan(loss):
+                print(f"Loss is nan at epoch {epoch}, batch {batch_idx}")
+                print(f"Output loss: {output_loss}, Gradient loss: {gradient_loss}")
+                #print(f"Output: {output}, Target: {target}")
+                #print(f"Output gradient: {output_gradient}, Target gradient: {target_gradient}")
+                raise ValueError("Loss is nan")
 
             loss.backward()
             
@@ -157,45 +192,41 @@ class Trainer(BaseTrainer):
                 mask = data[0, -1, :, :]
                 valid_points = torch.sum(mask) + 1e-8
 
-                if self.config['arch']['args']['dataset_type'] == "gradient":
-                    # Define Sobel kernels for computing gradients along x and y directions
-                    sobel_kernel_x = torch.tensor([[[-1, 0, 1],
-                                                    [-2, 0, 2],
-                                                    [-1, 0, 1]]], dtype=output.dtype, device=output.device)
+                eps = 1e-8
+                output = output.unsqueeze(1)  # shape [B,1,H,W]
 
-                    sobel_kernel_y = torch.tensor([[[-1, -2, -1],
-                                                    [ 0,  0,  0],
-                                                    [ 1,  2,  1]]], dtype=output.dtype, device=output.device)
+                # compute sobel gradients
+                grad_output_x = F.conv2d(output, self.sobel_kernel_x, padding=1)
+                grad_output_y = F.conv2d(output, self.sobel_kernel_y, padding=1)
+                grad_target_x = F.conv2d(target, self.sobel_kernel_x, padding=1)
+                grad_target_y = F.conv2d(target, self.sobel_kernel_y, padding=1)
 
-                    # Reshape kernels to match the conv2d weight shape: [out_channels, in_channels, kH, kW]
-                    sobel_kernel_x = sobel_kernel_x.unsqueeze(1)  # Shape: [1, 1, 3, 3]
-                    sobel_kernel_y = sobel_kernel_y.unsqueeze(1)  # Shape: [1, 1, 3, 3]
+                # magnitude
+                grad_magnitude_output = torch.sqrt(grad_output_x**2 + grad_output_y**2 + eps)
+                grad_magnitude_target = torch.sqrt(grad_target_x**2 + grad_target_y**2 + eps)
 
-                    output = output.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
-                    target = target.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
+                # normalization (fixed)
+                output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / (grad_magnitude_output.std() + eps)
+                target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / (grad_magnitude_target.std() + eps)
 
-                    # Compute gradients along x and y directions using conv2d
-                    grad_output_x = F.conv2d(output, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
-                    grad_output_y = F.conv2d(output, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+                # analyze curvature
+                curv_output = F.conv2d(output, self.laplace_kernel, padding=1)
+                curv_target = F.conv2d(target, self.laplace_kernel, padding=1)
 
-                    # Compute gradients of the target
-                    grad_target_x = F.conv2d(target, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
-                    grad_target_y = F.conv2d(target, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
+                curv_output_norm = (curv_output - curv_output.mean()) / (curv_output.std() + eps)
+                curv_target_norm = (curv_target - curv_target.mean()) / (curv_target.std() + eps)
 
-                    # Compute the gradient magnitude (2D norm) for each element in the batch
-                    grad_magnitude_output = torch.sqrt(grad_output_x ** 2 + grad_output_y ** 2)  # Shape: [batch_size, 1, height, width]
-                    grad_magnitude_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2)  # Shape: [batch_size, 1, height, width]
+                curvature_loss = ((curv_output_norm - curv_target_norm)**2 * mask).sum() / valid_points
 
-                    # Normalize the gradients with mean 0 and std 1
-                    output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / (grad_magnitude_output.std())
-                    target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / (grad_magnitude_target.std())
+                # pixelwise loss reduced by mask
+                output_loss = ((output - target)**2 * mask).sum() / valid_points
+                gradient_loss = ((output_gradient - target_gradient)**2 * mask).sum() / valid_points
 
-                
-                    output_loss = self.criterion(output * mask, target) 
-                    gradient_loss = self.criterion(output_gradient * mask, target_gradient)
-                    loss = (output_loss + gradient_loss) / 2
-                else:
-                    loss = self.criterion(output * mask, target * mask) / valid_points
+                w_curvature = 0.0
+                w_gradient = 1.0
+                w_output = 1.0
+                # print(f"Output loss: {output_loss}, Gradient loss: {gradient_loss}")
+                loss = (output_loss * w_output + gradient_loss * w_gradient + curvature_loss * w_curvature) / (w_output + w_gradient + w_curvature + eps)
 
                 self.writer.set_step((epoch - 1) * len(self.valid_data_loader) + batch_idx, 'valid')
                 self.valid_metrics.update('loss', loss.item())

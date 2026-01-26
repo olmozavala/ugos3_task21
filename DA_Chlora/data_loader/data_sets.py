@@ -75,7 +75,10 @@ class SimSatelliteDataset:
         self.plot_data = plot_data
         self.dataset_type = dataset_type
         # Input variables
-        input_vars = ["sst", "ssh_track", "swot"]
+        # Var order {0:sst, 1:LOG(CHLORA), 2:ssh_track, 3:swot}
+        input_vars = ["sst", "chlora", "ssh_track", "swot"]
+        selected_vars = [0,1,2]
+        input_vars = [var for var in input_vars if var in selected_vars]
         output_vars = ["ssh"]
         all_var_names = input_vars + output_vars
         input_normalized_vars = [f"{var}_normalized" for var in input_vars]
@@ -177,13 +180,19 @@ class SimSatelliteDataset:
         else:
             print(f"Reading {pkl_file} file...")
             with open(training_pkl_path, "rb") as f:
-                self.X, self.Y, self.lats, self.lons = pickle.load(f)
-            # Removing CHLORA from the X array
-            self.X = self.X[:, [0,2,3]]
-        
-        # Make a mask of the gulf of guinea
+                X, self.Y, self.lats, self.lons = pickle.load(f)
+            alt_M = X[:, -2]
+            swot = X[:, -1]
+            fused = np.where(~np.isnan(alt_M), alt_M, swot)
+            # Clipping unnecessary channels
+            X = X[:, selected_vars]
+            X[:, -1] = fused
+            self.X = X
+            # assert self.X.shape[1] == 2, f"self.X.shape: {self.X.shape}"
+
+        # Make a mask of the gulf of Mexico
         self.gulf_mask = np.zeros_like(self.Y[0,:,:])
-        # Create a mask for the Gulf of Guinea
+        # Create a mask for the Gulf of Mexico
         self.gulf_mask = np.where(~np.isnan(self.Y[0,:,:]), 1, 0)
         # Replace all the nan values in X and Y with 0s
         self.X = np.where(np.isnan(self.X), 0, self.X)
@@ -268,13 +277,13 @@ class SimSatelliteDataset:
 
         # Only for testing purposes plot the input data
         if self.plot_data:
-            input_names = ["sst", "ssh_track", "swot"]
+            input_names = ["chl", "ssh_track", "swot"]
             plot_single_batch_element(X_with_mask, self.Y[index], input_names, self.previous_days, 
                                       #f"/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/batch_example_{index}.jpg",
                                       f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_example_{index}.jpg",
                                       self.lats, self.lons, dataset_type=self.dataset_type)
 
-        return X_with_mask, self.Y[index]
+        return X_with_mask, self.Y[index].unsqueeze(0)
 
     def get_scaler(self):
         return self.scaler

@@ -1,12 +1,15 @@
 {
-    "name": "Gradient_model_rnoise_fields_nochlora",
-
-    "n_gpu": 4,
-    "dataset_type_opts": ["regular", "extended", "gradient"],
+    "name": "baseline_model_rnoise_fields_fused_ssh",
+    "n_gpu": 2,
+    "dataset_type_opts": [
+        "regular",
+        "extended",
+        "gradient"
+    ],
     "arch": {
         "type": "UNet",
         "args": {
-            "previous_days": 7, 
+            "previous_days": 7,
             "in_channels": 3,
             "start_filters": 32,
             "num_levels": 4,
@@ -21,9 +24,9 @@
     },
     "data_loader": {
         "type": "DefaultDataLoader",
-        "args":{
+        "args": {
             "data_dir": "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/",
-            "batch_size": 96,
+            "batch_size": 40,
             "shuffle": true,
             "validation_split": 0.1,
             "num_workers": 10,
@@ -34,7 +37,7 @@
     },
     "optimizer": {
         "type": "AdamW",
-        "args":{
+        "args": {
             "lr": 0.001,
             "weight_decay": 0.0001
         }
@@ -50,20 +53,15 @@
     },
     "trainer": {
         "epochs": 500,
-
-        "save_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/training",
+        "save_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/training",
         "save_period": 1,
         "verbosity": 2,
-        
         "monitor": "min val_loss",
         "early_stop": 10,
-
         "tensorboard": true
     },
     "tester": {
-
-        "weights_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Gradient_model_rnoise_fields_nochlora/1109_220754prevdays_7_activation_relu/",
-        "output_dir": "/unity/g2/jvelasco/ai_outs/task21_set1/testing"
+        "weights_dir": "/unity/g2/jvelasco/ai_outs/ugos3/training_dump/models/baseline_model_rnoise_fields_fused_ssh_wcurv_v4/0125_124657prevdays_7_activation_relu/",
+        "output_dir": "/unity/g2/jvelasco/ai_outs/ugos3/testing"
     }
 }
-

@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from data_loader.loader_utils import plot_predictions
 import xarray as xr
+import torch.nn.functional as F
 
 # Only for jvelasco (toch has some problems to compile models)
 import torch._dynamo
@@ -59,7 +60,7 @@ def main(config):
     model_name = training_config['name']
 
     # Setup output directory
-    output_dir = join(config['tester']['output_dir'], model_name)
+    output_dir = join(config['tester']['output_dir'], model_name, weights_dir.split('/')[-2])
     os.makedirs(output_dir, exist_ok=True)
 
     weights_file = join(weights_dir, 'model_best.pth')
@@ -105,8 +106,10 @@ def main(config):
                 lats = lats[:data.shape[2]]
                 lons = lons[:data.shape[3]]
 
-            print(f"Batch {i} of {len(data_loader)}")
+            # print(f"Batch {i} of {len(data_loader)}")
             data, target = data.to(device), target.to(device)
+            mask = data[:, -1, :, :]
+            target = target.squeeze()
             output = model(data)
 
             # computing loss, metrics on test set
@@ -115,38 +118,53 @@ def main(config):
             target = target * std_ssh + mean_ssh
 
             # Plotting the output
-            print(f"Shape of output: {output.shape}")
+            #print(f"Shape of output: {output.shape}")
+            #print(f"Shape of target: {target.shape}")
+
             # Plotting the output
-            # Bring the data to numpy
-            data_cpu = data.cpu().numpy()
-            target_cpu = target.cpu().numpy()
-            output_cpu = output.cpu().numpy()
-            # For each batch plot the first 20 samples
-            # for j in range(min(output.shape[0], 20)):
-            for j in range(previous_days, min(output.shape[0], previous_days + 10)):
+            # For each batch plot the first 10 samples
+            for j in range(min(output.shape[0], 3)):
                 ex_num = i*batch_size + j + 1
                 file_name = join(output_dir, f"{model_name}_ex_{ex_num:03d}.png")
-                plot_predictions(data_cpu[j, :, :, :], target_cpu[j, :, :], 
-                                 output_cpu[j, :, :], file_name, lats, lons, dataset_type)
+                plot_predictions(data[j].detach().cpu().numpy(), 
+                                 target[j].detach().cpu().numpy(), 
+                                 output[j].detach().cpu().numpy(), file_name, lats, lons, dataset_type)
+            
+            #for j in range(previous_days, min(output.shape[0], previous_days + 10)):
+            # for j in range(output.shape[0]):
+            #    ex_num = i*batch_size + j + 1
+            #    file_name = join(output_dir, f"{model_name}_ex_{ex_num:03d}.png")
+            #    # print(f"Plotting example {ex_num} to {file_name}")
+            #    plot_predictions(data[j].detach().cpu().numpy(), 
+            #                     target[j].detach().cpu().numpy(), 
+            #                     output[j].detach().cpu().numpy(), file_name, lats, lons, dataset_type)
+            
+            # Mask-aware loss (same as training)
+            loss = F.mse_loss(output * mask, target * mask, reduction='sum')
+            valid = mask.sum()
+            loss = loss / (valid + 1e-8)
 
-            loss = loss_fn(output, target)
             batch_size = data.shape[0]
             total_loss += loss.item() * batch_size
+
+            # Metrics
             for j, metric in enumerate(metric_fns):
                 total_metrics[j] += metric(output, target) * batch_size
 
-            # Compute the RMSE for each sample in the batch
-            rmse = torch.sqrt(torch.mean((output - target)**2, dim=(1, 2)))
-            for j in range(rmse.shape[0]):
-                validation_loss.append(rmse[j].item())
+            # Mask-aware RMSE per sample
+            diff2 = ((output - target)**2) * mask
+            rmse = torch.sqrt(diff2.sum(dim=(1,2)) / (mask.sum(dim=(1,2)) + 1e-8))
+
+            for r in rmse.cpu().numpy():
+                validation_loss.append(float(r))
 
             if save_predictions:
                 # Save the output to a netcdf file
                 for j in range(output.shape[0]):
                     output_file = join(output_dir, f"pred_batch_{i}_sample_{j}.nc")
                     xr.Dataset({
-                        'output': (['latitude', 'longitude'], output_cpu[j, :, :]),
-                        'target': (['latitude', 'longitude'], target_cpu[j, :, :])
+                        'output': (['latitude', 'longitude'], output[j].detach().cpu().numpy()),
+                        'target': (['latitude', 'longitude'], target[j].detach().cpu().numpy())
                     }, coords={
                         'latitude': lats,
                         'longitude': lons
@@ -197,7 +215,7 @@ if __name__ == '__main__':
 
 # %% Redoo RMSE plot
 # Read the RMSE from the csv file
-folder = "/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Gradient_model_rnoise_fields_nochlora/"
+folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset/"
 # folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation"
 file_name = join(folder, "loss.csv")
 rmse_data = np.loadtxt(file_name, delimiter=",")

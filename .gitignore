@@ -134,3 +134,4 @@ dmypy.json
 
 # Linked paths
 ai_outs
+debug_*
