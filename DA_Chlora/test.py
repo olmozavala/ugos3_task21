@@ -41,7 +41,8 @@ def main(config):
         # training=True,
         num_workers=config['data_loader']['args']['num_workers'],
         previous_days=config['data_loader']['args']['previous_days'],
-        dataset_type=dataset_type
+        dataset_type=dataset_type,
+        input_vars=config['data_loader']['args']['input_vars']
     )
 
     # Read the scalers from the data_dir

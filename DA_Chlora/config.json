@@ -1,7 +1,7 @@
 {
     "name": "baseline_model_rnoise_fields_fused_ssh_spectral",
     "n_gpu": 2,
-    "mode": "training",
+    "mode": "testing",
     "dataset_type_opts": [
         "regular",
         "extended",
@@ -11,7 +11,7 @@
         "type": "UNet",
         "args": {
             "previous_days": 7,
-            "in_channels": 3,
+            "in_channels": null,
             "start_filters": 32,
             "num_levels": 4,
             "kernel_size": 3,
@@ -33,7 +33,8 @@
             "num_workers": 10,
             "previous_days": 7,
             "horizon_days": 2,
-            "dataset_type": "gradient"
+            "dataset_type": "gradient",
+            "input_vars": ["sst", "chlora", "fused_ssh"]
         }
     },
     "optimizer": {
@@ -45,8 +46,8 @@
     },
     "loss": [
         { "name": "masked_mse_loss", "weight": 1.0 },
-        { "name": "sobel_gradient_magnitude_loss", "weight": 0.5, "args": { "normalize": false } },
-        { "name": "spectral_logloss", "weight": 0.1 }
+        { "name": "sobel_gradient_magnitude_loss", "weight": 0.30, "args": { "normalize": false } },
+        { "name": "spectral_logloss", "weight": 0.08 }
     ],
     "metrics": [],
     "lr_scheduler": {
@@ -58,7 +59,7 @@
     },
     "trainer": {
         "epochs": 500,
-        "save_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/training",
+        "save_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/training_dump",
         "save_period": 1,
         "verbosity": 2,
         "monitor": "min val_loss",
@@ -67,7 +68,7 @@
     },
     "tester": {
         "testing":false,
-        "weights_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/training/models/baseline_model_rnoise_fields_fused_ssh_v2/0128_164606prevdays_7_activation_relu/",
+        "weights_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/training/models/baseline_model_rnoise_fields_fused_ssh_spectral/0129_105055prevdays_7_activation_relu/",
         "output_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/testing"
     }
 }

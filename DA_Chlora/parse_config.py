@@ -22,6 +22,10 @@ class ConfigParser:
         self._config = _update_config(config, modification)
         self.resume = resume
 
+        # Sync/validate model input channels against data loader variable selection.
+        # UNet expects `arch.args.in_channels` == number of variables per-day (it multiplies by previous_days internally).
+        self._sync_in_channels_with_data_loader()
+
         # set save_dir where trained model and log will be saved.
         save_dir = Path(self.config['trainer']['save_dir'])
 
@@ -37,8 +41,8 @@ class ConfigParser:
 
         # make directory for saving checkpoints and log.
         exist_ok = run_id == ''
-        if self.config['mode'] == 'training':
-            self.save_dir.mkdir(parents=True, exist_ok=exist_ok)
+        #if self.config['mode'] == 'training':
+        self.save_dir.mkdir(parents=True, exist_ok=exist_ok)
         self.log_dir.mkdir(parents=True, exist_ok=exist_ok)
 
         # save updated config file to the checkpoint dir
@@ -51,6 +55,60 @@ class ConfigParser:
             1: logging.INFO,
             2: logging.DEBUG
         }
+
+    def _infer_day_channels_from_data_loader(self):
+        dl = self._config.get('data_loader', {})
+        dl_args = dl.get('args', {}) if isinstance(dl, dict) else {}
+        if not isinstance(dl_args, dict):
+            return None
+
+        # Preferred: explicitly named variables
+        input_vars = dl_args.get('input_vars', None)
+        if input_vars is not None:
+            if not isinstance(input_vars, list) or not all(isinstance(v, str) for v in input_vars):
+                raise ValueError(f"`data_loader.args.input_vars` must be a list of strings, got: {input_vars}")
+            if len(input_vars) == 0:
+                raise ValueError("`data_loader.args.input_vars` cannot be empty.")
+            return len(input_vars)
+
+        # Backwards-compatible: indices or names
+        selected_vars = dl_args.get('selected_vars', None)
+        if selected_vars is not None:
+            if not isinstance(selected_vars, list):
+                raise ValueError(f"`data_loader.args.selected_vars` must be a list, got: {selected_vars}")
+            if len(selected_vars) == 0:
+                raise ValueError("`data_loader.args.selected_vars` cannot be empty.")
+            if not (all(isinstance(v, int) for v in selected_vars) or all(isinstance(v, str) for v in selected_vars)):
+                raise ValueError("`data_loader.args.selected_vars` must be all ints or all strings.")
+            return len(selected_vars)
+
+        return None
+
+    def _sync_in_channels_with_data_loader(self):
+        arch = self._config.get('arch', {})
+        arch_args = arch.get('args', {}) if isinstance(arch, dict) else {}
+        if not isinstance(arch_args, dict):
+            return
+
+        inferred = self._infer_day_channels_from_data_loader()
+        if inferred is None:
+            return
+
+        current = arch_args.get('in_channels', None)
+        if current is None or current == "auto":
+            arch_args['in_channels'] = inferred
+            return
+
+        if not isinstance(current, int):
+            raise ValueError(f"`arch.args.in_channels` must be an int (or null/'auto'), got: {current} ({type(current)})")
+
+        if current != inferred:
+            raise ValueError(
+                "Config mismatch: `arch.args.in_channels` must match the number of input variables per day.\n"
+                f"- arch.args.in_channels = {current}\n"
+                f"- inferred from data_loader = {inferred}\n"
+                "Fix by setting `arch.args.in_channels` to null (auto) or updating `data_loader.args.input_vars`."
+            )
 
     @classmethod
     def from_args(cls, args, options=''):

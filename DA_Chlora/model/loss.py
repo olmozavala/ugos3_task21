@@ -144,7 +144,7 @@ def build_loss(loss_spec: Any) -> Callable[..., torch.Tensor]:
         return _resolve_loss_callable(loss_spec)
 
     if isinstance(loss_spec, list):
-        return weighted_sum_loss_factory(loss_spec)
+        return WeightedSumLoss(loss_spec)
 
     if isinstance(loss_spec, dict):
         loss_type = loss_spec.get("type")
@@ -155,7 +155,7 @@ def build_loss(loss_spec: Any) -> Callable[..., torch.Tensor]:
                 raise ValueError("weighted_sum loss requires args.terms (or args.losses) to be a list")
             normalize = bool(args.get("normalize", True))
             eps = float(args.get("eps", 1e-10))
-            return weighted_sum_loss_factory(terms, normalize=normalize, eps=eps)
+            return WeightedSumLoss(terms, normalize=normalize, eps=eps)
         # allow dict specifying a single loss with args:
         if isinstance(loss_type, str):
             return _resolve_loss_callable(loss_type, args)
@@ -317,6 +317,79 @@ class WeightedLossTerm:
     args: Optional[Mapping[str, Any]] = None
 
 
+class WeightedSumLoss(torch.nn.Module):
+    """
+    Weighted sum of multiple loss terms.
+
+    After each forward call, stores:
+    - `last_components`: dict[name] -> {"raw": Tensor, "weighted": Tensor, "contribution": Tensor}
+        where:
+          raw = loss_i(...)
+          weighted = weight_i * raw
+          contribution = weighted / (sum_w + eps) if normalize else weighted
+    """
+
+    def __init__(
+        self,
+        terms: Sequence[Union[Mapping[str, Any], WeightedLossTerm]],
+        normalize: bool = True,
+        eps: float = 1e-10,
+    ) -> None:
+        super().__init__()
+        self.normalize = bool(normalize)
+        self.eps = float(eps)
+
+        parsed_terms: List[WeightedLossTerm] = []
+        for t in terms:
+            if isinstance(t, WeightedLossTerm):
+                parsed_terms.append(t)
+                continue
+            if not isinstance(t, dict):
+                raise TypeError(f"Each loss term must be a dict, got {type(t)}")
+            name = t.get("name") or t.get("type")
+            if not isinstance(name, str):
+                raise ValueError(f"Loss term missing 'name': {t}")
+            weight = float(t.get("weight", 1.0))
+            args = t.get("args") or {}
+            parsed_terms.append(WeightedLossTerm(name=name, weight=weight, args=args))
+
+        self._terms: List[Tuple[str, float, Callable[..., torch.Tensor]]] = [
+            (term.name, term.weight, _resolve_loss_callable(term.name, term.args)) for term in parsed_terms
+        ]
+
+        self.last_components: Dict[str, Dict[str, torch.Tensor]] = {}
+
+    def forward(self, output: torch.Tensor, target: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        total = None
+        wsum = 0.0
+        comps: Dict[str, Dict[str, torch.Tensor]] = {}
+
+        for name, w, fn in self._terms:
+            if w == 0.0:
+                continue
+            raw = fn(output, target, **kwargs)
+            weighted = raw * w
+            comps[name] = {"raw": raw.detach(), "weighted": weighted.detach()}
+            total = weighted if total is None else (total + weighted)
+            wsum += w
+
+        if total is None:
+            raise ValueError("Weighted loss has no non-zero terms")
+
+        if self.normalize:
+            denom = total.new_tensor(wsum + self.eps)
+            out = total / denom
+            for v in comps.values():
+                v["contribution"] = v["weighted"] / denom
+        else:
+            out = total
+            for v in comps.values():
+                v["contribution"] = v["weighted"]
+
+        self.last_components = comps
+        return out
+
+
 def weighted_sum_loss_factory(
     terms: Sequence[Union[Mapping[str, Any], WeightedLossTerm]],
     normalize: bool = True,
@@ -327,39 +400,14 @@ def weighted_sum_loss_factory(
         sum_i w_i * loss_i(...) / (sum_i w_i + eps)   if normalize=True
         sum_i w_i * loss_i(...)                      if normalize=False
     """
-    parsed_terms: List[WeightedLossTerm] = []
-    for t in terms:
-        if isinstance(t, WeightedLossTerm):
-            parsed_terms.append(t)
-            continue
-        if not isinstance(t, dict):
-            raise TypeError(f"Each loss term must be a dict, got {type(t)}")
-        name = t.get("name") or t.get("type")
-        if not isinstance(name, str):
-            raise ValueError(f"Loss term missing 'name': {t}")
-        weight = float(t.get("weight", 1.0))
-        args = t.get("args") or {}
-        parsed_terms.append(WeightedLossTerm(name=name, weight=weight, args=args))
-
-    callables: List[Tuple[float, Callable[..., torch.Tensor]]] = [
-        (term.weight, _resolve_loss_callable(term.name, term.args)) for term in parsed_terms
-    ]
+    # Backwards-compatible functional wrapper.
+    module = WeightedSumLoss(terms, normalize=normalize, eps=eps)
 
     def _loss(output: torch.Tensor, target: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-        total = None
-        wsum = 0.0
-        for w, fn in callables:
-            if w == 0.0:
-                continue
-            cur = fn(output, target, **kwargs)
-            total = (w * cur) if total is None else (total + (w * cur))
-            wsum += w
-        if total is None:
-            raise ValueError("Weighted loss has no non-zero terms")
-        if not normalize:
-            return total
-        return total / (wsum + eps)
+        return module(output, target, **kwargs)
 
+    # expose breakdown on the returned callable
+    _loss._weighted_sum_module = module  # type: ignore[attr-defined]
     return _loss
 
 

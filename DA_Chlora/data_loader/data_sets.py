@@ -14,6 +14,54 @@ import re
 import glob
 import cv2
 
+# Canonical variable order for stacking X in the cached pkl.
+# IMPORTANT: indices in config refer to this ordering.
+DEFAULT_INPUT_VARS = ["sst", "chlora", "ssh_track", "swot", "fused_ssh"]
+
+def _resolve_selected_vars(*, all_input_vars, input_vars=None, selected_vars=None):
+    """
+    Resolve requested input variables to:
+    - selected_names: list[str] in the canonical order of `all_input_vars`
+    - selected_indices: list[int] indices into `all_input_vars`
+
+    Priority:
+    1) `input_vars` (names) if provided
+    2) `selected_vars` (names or indices) if provided
+    3) default: all_input_vars (no clipping)
+    """
+    if input_vars is not None:
+        if not isinstance(input_vars, (list, tuple)) or not all(isinstance(v, str) for v in input_vars):
+            raise ValueError(f"`input_vars` must be a list of strings, got: {type(input_vars)} -> {input_vars}")
+        requested_names = list(input_vars)
+    elif selected_vars is not None:
+        if not isinstance(selected_vars, (list, tuple)):
+            raise ValueError(f"`selected_vars` must be a list (of indices or names), got: {type(selected_vars)}")
+        if len(selected_vars) == 0:
+            raise ValueError("`selected_vars` cannot be empty.")
+        if all(isinstance(v, int) for v in selected_vars):
+            requested_names = []
+            for idx in selected_vars:
+                if idx < 0 or idx >= len(all_input_vars):
+                    raise ValueError(
+                        f"selected_vars index {idx} out of range for all_input_vars (len={len(all_input_vars)}): {all_input_vars}"
+                    )
+                requested_names.append(all_input_vars[idx])
+        elif all(isinstance(v, str) for v in selected_vars):
+            requested_names = list(selected_vars)
+        else:
+            raise ValueError(f"`selected_vars` must be all ints or all strings, got: {selected_vars}")
+    else:
+        requested_names = list(all_input_vars)
+
+    unknown = [v for v in requested_names if v not in all_input_vars]
+    if unknown:
+        raise ValueError(f"Unknown input variables requested: {unknown}. Valid options: {all_input_vars}")
+
+    # Keep canonical ordering to match the cached X stacking.
+    selected_names = [v for v in all_input_vars if v in requested_names]
+    selected_indices = [all_input_vars.index(v) for v in selected_names]
+    return selected_names, selected_indices
+
 # Function to apply StandardScaler to an array and persist the scaler
 def scale_data_dataset(data, scalers, name, training=True):
     # Flatten the data to 2D, where each row is a sample
@@ -68,21 +116,38 @@ class SimSatelliteDataset:
     # Total 1758*2 = 3516 training examples
     # 10% validation split -> 351 examples
     # 90% training split -> 3165 examples
-    def __init__(self, data_dir, transform=None, previous_days=1, plot_data=False, training=True, dataset_type="regular"):
+    def __init__(
+        self,
+        data_dir,
+        transform=None,
+        previous_days=1,
+        plot_data=False,
+        training=True,
+        dataset_type="regular",
+        input_vars=None,
+        selected_vars=None,
+        all_input_vars=None,
+    ):
         self.data_dir = data_dir
         self.transform = transform
         self.scalers = {}  # To store scalers for each variable
         self.previous_days = previous_days
         self.plot_data = plot_data
         self.dataset_type = dataset_type
-        # Input variables
+
+        # Input variables (canonical order used for stacking cached X)
+        self.all_input_vars = list(all_input_vars) if all_input_vars is not None else list(DEFAULT_INPUT_VARS)
         # Var order {0:sst, 1:LOG(CHLORA), 2:ssh_track, 3:swot, 4:fused_ssh}
-        input_vars = ["sst", "chlora", "ssh_track", "swot", "fused_ssh"]
-        selected_vars = [0,1,4]
-        input_vars = [var for var in input_vars if var in selected_vars]
+        self.input_vars, self.selected_var_indices = _resolve_selected_vars(
+            all_input_vars=self.all_input_vars,
+            input_vars=input_vars,
+            selected_vars=selected_vars,
+        )
+
         output_vars = ["ssh"]
-        all_var_names = input_vars + output_vars
-        input_normalized_vars = [f"{var}_normalized" for var in input_vars]
+        all_var_names = self.all_input_vars + output_vars
+        # We always normalize/stack in canonical order for caching; selection happens after load.
+        input_normalized_vars = [f"{var}_normalized" for var in self.all_input_vars]
         output_var = [f"{var}_normalized" for var in output_vars][0]
 
         scalers_file = "scalers.pkl"
@@ -168,22 +233,33 @@ class SimSatelliteDataset:
                     plot_dataset_data(idx, all_data, lats, lons)
              
             print("Stack the data and assign to X and Y")
-            self.X = np.stack([all_data[var_name].compute().data for var_name in input_normalized_vars], axis=0)
-            self.Y = all_data[output_var].compute().data
-            # Flip the first and second dimensions in X  
-            self.X = np.transpose(self.X, (1, 0, 2, 3))
+            X_full = np.stack([all_data[var_name].compute().data for var_name in input_normalized_vars], axis=0)
+            Y = all_data[output_var].compute().data
+            # Flip the first and second dimensions in X
+            X_full = np.transpose(X_full, (1, 0, 2, 3))
+
+            # Keep full channels in cache, but use selected channels for this dataset instance.
+            if X_full.shape[1] >= (max(self.selected_var_indices) + 1):
+                X = X_full[:, self.selected_var_indices]
+            else:
+                # Backwards compatibility with any pre-clipped cached files.
+                X = X_full
+            self.X = X
+            self.Y = Y
 
             print("Saving the training data...")
             # Saving the training data
             with open(training_pkl_path, "wb") as f:
-                pickle.dump((self.X, self.Y, self.lats, self.lons), f)
+                # Store full X so future experiments can slice differently without regenerating.
+                pickle.dump((X_full, self.Y, self.lats, self.lons), f)
             print("Training data saved!")
         else:
             print(f"Reading {pkl_file} file...")
             with open(training_pkl_path, "rb") as f:
                 X, self.Y, self.lats, self.lons = pickle.load(f)
-            # Clipping unnecessary channels
-            X = X[:, selected_vars]
+            # Clip channels based on config selection, if the cached X has those channels.
+            if X.shape[1] >= (max(self.selected_var_indices) + 1):
+                X = X[:, self.selected_var_indices]
             self.X = X
             # assert self.X.shape[1] == 2, f"self.X.shape: {self.X.shape}"
 
@@ -300,10 +376,11 @@ if __name__ == "__main__":
     previous_days = 7
     dataset_type = "gradient"
     shuffle = True
+    input_vars = ["fused_ssh"]
 
     # Create an instance of the SimSatelliteDataset
     dataset = SimSatelliteDataset(data_dir, previous_days=previous_days, transform=None,
-                                   plot_data=plot_data, training=training, dataset_type=dataset_type)
+                                   plot_data=plot_data, training=training, dataset_type=dataset_type, selected_vars=input_vars)
 
     # Create a data loader for the dataset
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)

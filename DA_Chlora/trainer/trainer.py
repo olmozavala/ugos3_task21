@@ -80,10 +80,25 @@ class Trainer(BaseTrainer):
                 self.train_metrics.update(met.__name__, met(output_metric, target))
 
             if batch_idx % self.log_step == 0:
+                loss_breakdown = ""
+                if hasattr(self.criterion, "last_components") and getattr(self.criterion, "last_components"):
+                    comps = getattr(self.criterion, "last_components")
+                    # Print weight*loss_i (numerator terms)
+                    parts = []
+                    for name, v in comps.items():
+                        wloss = v.get("weighted", None)
+                        if wloss is None:
+                            continue
+                        try:
+                            parts.append(f"{name}={wloss.item():.6f}")
+                        except Exception:
+                            pass
+                    if parts:
+                        loss_breakdown = " | " + ", ".join(parts)
                 self.logger.debug('Train Epoch: {} {} Loss: {:.6f}'.format(
                     epoch,
                     self._progress(batch_idx),
-                    loss.item()))
+                    loss.item()) + loss_breakdown)
                 # self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
 
             if batch_idx == self.len_epoch:
