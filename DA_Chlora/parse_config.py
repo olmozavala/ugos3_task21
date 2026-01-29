@@ -37,7 +37,8 @@ class ConfigParser:
 
         # make directory for saving checkpoints and log.
         exist_ok = run_id == ''
-        self.save_dir.mkdir(parents=True, exist_ok=exist_ok)
+        if self.config['mode'] == 'training':
+            self.save_dir.mkdir(parents=True, exist_ok=exist_ok)
         self.log_dir.mkdir(parents=True, exist_ok=exist_ok)
 
         # save updated config file to the checkpoint dir

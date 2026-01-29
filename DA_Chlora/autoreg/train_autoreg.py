@@ -77,7 +77,9 @@ model = torch.compile(model)
 model.load_state_dict(weights['state_dict'])
 
 # get function handles of loss and metrics
-criterion = getattr(module_loss, config['loss'])
+criterion = module_loss.build_loss(config['loss'])
+if isinstance(criterion, torch.nn.Module):
+    criterion = criterion.to(device)
 metrics = [getattr(module_metric, met) for met in config['metrics']]
 
 # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler

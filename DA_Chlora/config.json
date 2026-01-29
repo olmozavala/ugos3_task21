@@ -1,6 +1,7 @@
 {
-    "name": "baseline_model_rnoise_fields_fused_ssh_wcurvature",
+    "name": "baseline_model_rnoise_fields_fused_ssh_spectral",
     "n_gpu": 2,
+    "mode": "training",
     "dataset_type_opts": [
         "regular",
         "extended",
@@ -42,7 +43,11 @@
             "weight_decay": 0.0001
         }
     },
-    "loss": "mse_loss",
+    "loss": [
+        { "name": "masked_mse_loss", "weight": 1.0 },
+        { "name": "sobel_gradient_magnitude_loss", "weight": 0.5, "args": { "normalize": false } },
+        { "name": "spectral_logloss", "weight": 0.1 }
+    ],
     "metrics": [],
     "lr_scheduler": {
         "type": "StepLR",

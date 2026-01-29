@@ -16,8 +16,6 @@ class Trainer(BaseTrainer):
         self.config = config
         self.device = device
         self.data_loader = data_loader
-        self.register_sobel_kernels()
-        self.register_curvature_kernels()
         if len_epoch is None:
             print("Epoch-based training")
             # epoch-based training
@@ -34,35 +32,6 @@ class Trainer(BaseTrainer):
 
         self.train_metrics = MetricTracker('loss', *[m.__name__ for m in self.metric_ftns], writer=self.writer)
         self.valid_metrics = MetricTracker('loss', *[m.__name__ for m in self.metric_ftns], writer=self.writer)
-    
-    def register_sobel_kernels(self):
-        sobel_x = torch.tensor([
-            [[-1, 0, 1],
-            [-2, 0, 2],
-            [-1, 0, 1]]], dtype=torch.float32)
-
-        sobel_y = torch.tensor([
-            [[-1, -2, -1],
-            [ 0,  0,  0],
-            [ 1,  2,  1]]], dtype=torch.float32)
-
-        # Reshape to [out_channels, in_channels, kH, kW]
-        self.sobel_kernel_x = sobel_x.unsqueeze(1).to(self.device)
-        self.sobel_kernel_y = sobel_y.unsqueeze(1).to(self.device)
-
-        # Make sure autograd does not track these
-        self.sobel_kernel_x.requires_grad_(False)
-        self.sobel_kernel_y.requires_grad_(False)
-
-    def register_curvature_kernels(self):
-        laplacian = torch.tensor([
-            [[ 0,  1,  0],
-            [ 1, -4,  1],
-            [ 0,  1,  0]]
-        ], dtype=torch.float32)
-
-        self.laplace_kernel = laplacian.unsqueeze(1).to(self.device)
-        self.laplace_kernel.requires_grad_(False)
 
     def _train_epoch(self, epoch):
         """
@@ -91,54 +60,10 @@ class Trainer(BaseTrainer):
             # I hardcoded the device type to cuda because I was getting an error when it tried to run on the CPU
 
             output = self.model(data)
-            # Create a mask for the valid points
-            mask = data[:, -1, :, :].unsqueeze(1)  # [B,1,H,W]
-            valid_points = torch.sum(mask) 
-            #print(f"Output shape: {output.shape}")
-            #print(f"Target shape: {target.shape}")
-
-            eps = 1e-10
-            output = output.unsqueeze(1)  # shape [B,1,H,W]
-            # print(f"Output shape: {output.shape}")
-            # compute sobel gradients
-            grad_output_x = F.conv2d(output, self.sobel_kernel_x, padding=1)
-            grad_output_y = F.conv2d(output, self.sobel_kernel_y, padding=1)
-            grad_target_x = F.conv2d(target, self.sobel_kernel_x, padding=1)
-            grad_target_y = F.conv2d(target, self.sobel_kernel_y, padding=1)
-
-            # magnitude
-            grad_magnitude_output = torch.sqrt(grad_output_x**2 + grad_output_y**2 + eps)
-            grad_magnitude_target = torch.sqrt(grad_target_x**2 + grad_target_y**2 + eps)
-
-            # normalization (fixed)
-            output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / (grad_magnitude_output.std() + eps)
-            target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / (grad_magnitude_target.std() + eps)
-
-            # analyze curvature
-            curv_output = F.conv2d(output, self.laplace_kernel, padding=1)
-            curv_target = F.conv2d(target, self.laplace_kernel, padding=1)
-
-            curv_output_norm = (curv_output - curv_output.mean()) / (curv_output.std() + eps)
-            curv_target_norm = (curv_target - curv_target.mean()) / (curv_target.std() + eps)
-
-            curvature_loss = ((curv_output_norm - curv_target_norm)**2 * mask).sum() / valid_points
-
-            # pixelwise loss reduced by mask
-            output_loss = ((output - target)**2 * mask).sum() / valid_points
-            gradient_loss = ((output_gradient - target_gradient)**2 * mask).sum() / valid_points
-
-            w_curvature = 0.5
-            w_gradient = 0.9
-            w_output = 1.0
-            # print(f"Output loss: {output_loss}, Gradient loss: {gradient_loss}")
-            loss = (output_loss * w_output + gradient_loss * w_gradient + curvature_loss * w_curvature) / (w_output + w_gradient + w_curvature + eps)
-            #loss = output_loss / valid_points
+            loss = self.criterion(output, target, data=data)
             # If loss is nan, kill the process
             if torch.isnan(loss):
                 print(f"Loss is nan at epoch {epoch}, batch {batch_idx}")
-                print(f"Output loss: {output_loss}, Gradient loss: {gradient_loss}")
-                #print(f"Output: {output}, Target: {target}")
-                #print(f"Output gradient: {output_gradient}, Target gradient: {target_gradient}")
                 raise ValueError("Loss is nan")
 
             loss.backward()
@@ -151,7 +76,8 @@ class Trainer(BaseTrainer):
             self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
             self.train_metrics.update('loss', loss.item())
             for met in self.metric_ftns:
-                self.train_metrics.update(met.__name__, met(output, target))
+                output_metric = output.unsqueeze(1) if output.dim() == 3 else output
+                self.train_metrics.update(met.__name__, met(output_metric, target))
 
             if batch_idx % self.log_step == 0:
                 self.logger.debug('Train Epoch: {} {} Loss: {:.6f}'.format(
@@ -186,49 +112,13 @@ class Trainer(BaseTrainer):
                 data, target = data.to(self.device), target.to(self.device)
 
                 output = self.model(data)
-                mask = data[0, -1, :, :]
-                valid_points = torch.sum(mask) + 1e-8
-
-                eps = 1e-8
-                output = output.unsqueeze(1)  # shape [B,1,H,W]
-
-                # compute sobel gradients
-                grad_output_x = F.conv2d(output, self.sobel_kernel_x, padding=1)
-                grad_output_y = F.conv2d(output, self.sobel_kernel_y, padding=1)
-                grad_target_x = F.conv2d(target, self.sobel_kernel_x, padding=1)
-                grad_target_y = F.conv2d(target, self.sobel_kernel_y, padding=1)
-
-                # magnitude
-                grad_magnitude_output = torch.sqrt(grad_output_x**2 + grad_output_y**2 + eps)
-                grad_magnitude_target = torch.sqrt(grad_target_x**2 + grad_target_y**2 + eps)
-
-                # normalization (fixed)
-                output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / (grad_magnitude_output.std() + eps)
-                target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / (grad_magnitude_target.std() + eps)
-
-                # analyze curvature
-                curv_output = F.conv2d(output, self.laplace_kernel, padding=1)
-                curv_target = F.conv2d(target, self.laplace_kernel, padding=1)
-
-                curv_output_norm = (curv_output - curv_output.mean()) / (curv_output.std() + eps)
-                curv_target_norm = (curv_target - curv_target.mean()) / (curv_target.std() + eps)
-
-                curvature_loss = ((curv_output_norm - curv_target_norm)**2 * mask).sum() / valid_points
-
-                # pixelwise loss reduced by mask
-                output_loss = ((output - target)**2 * mask).sum() / valid_points
-                gradient_loss = ((output_gradient - target_gradient)**2 * mask).sum() / valid_points
-
-                w_curvature = 0.5
-                w_gradient = 0.9
-                w_output = 1.0
-                # print(f"Output loss: {output_loss}, Gradient loss: {gradient_loss}")
-                loss = (output_loss * w_output + gradient_loss * w_gradient + curvature_loss * w_curvature) / (w_output + w_gradient + w_curvature + eps)
+                loss = self.criterion(output, target, data=data)
 
                 self.writer.set_step((epoch - 1) * len(self.valid_data_loader) + batch_idx, 'valid')
                 self.valid_metrics.update('loss', loss.item())
                 for met in self.metric_ftns:
-                    self.valid_metrics.update(met.__name__, met(output, target))
+                    output_metric = output.unsqueeze(1) if output.dim() == 3 else output
+                    self.valid_metrics.update(met.__name__, met(output_metric, target))
                 # self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
 
         # add histogram of model parameters to the tensorboard
