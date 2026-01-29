@@ -135,3 +135,8 @@ dmypy.json
 # Linked paths
 ai_outs
 debug_*
+
+# Slurm files
+*.out
+*.err
+*.slurm

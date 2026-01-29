@@ -8,6 +8,7 @@ import torch
 from os.path import join
 #from data_loader.loader_utils import *
 import matplotlib.pyplot as plt
+import cv2
 
 
 # Function to apply StandardScaler to an array and persist the scaler
@@ -56,7 +57,7 @@ class AutoregressiveDataset:
     def __init__(self, data_dir, transform=None, 
                  previous_days=1, horizon_days=1,
                  plot_data=False, training=True, 
-                 input_vars=["sst", "chlora", "ssh_track", "swot"], 
+                 selected_vars=[0,1,2], 
                  output_vars=["ssh"], 
                  dataset_type="regular", 
                  demo=False):
@@ -71,6 +72,9 @@ class AutoregressiveDataset:
         self.plot_data = plot_data
 
         # Input variables
+        # Var order {0:sst, 1:LOG(CHLORA), 2:ssh_track, 3:swot}
+        input_vars = ["sst", "chlora", "ssh_track", "swot"]
+        
         self.input_vars = input_vars
         self.output_vars = output_vars
         all_var_names = input_vars + output_vars
@@ -118,7 +122,8 @@ class AutoregressiveDataset:
         gulf = np.zeros_like(self.Y[0,:,:])
         # Create a mask for the Gulf of Mexico
         gulf = np.where(~np.isnan(gulf), 1, 0)
-        self.gulf_mask = torch.tensor(gulf, dtype=torch.float32)
+        kernel = np.ones((3,3), dtype=np.uint8)
+        self.gulf_mask = cv2.dilate(gulf.astype(np.uint8), kernel, iterations=1)
 
     def xyarrays2Tensors(self, crop_factor=8):
         """

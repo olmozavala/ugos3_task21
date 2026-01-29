@@ -1,5 +1,5 @@
 {
-    "name": "baseline_model_rnoise_fields_fused_ssh",
+    "name": "baseline_model_rnoise_fields_fused_ssh_wcurvature",
     "n_gpu": 2,
     "dataset_type_opts": [
         "regular",
@@ -25,7 +25,7 @@
     "data_loader": {
         "type": "DefaultDataLoader",
         "args": {
-            "data_dir": "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data/",
+            "data_dir": "/unity/g2/jvelasco/dataset/ugos/new_datasets/",
             "batch_size": 40,
             "shuffle": true,
             "validation_split": 0.1,
@@ -61,7 +61,8 @@
         "tensorboard": true
     },
     "tester": {
-        "weights_dir": "/unity/g2/jvelasco/ai_outs/ugos3/training_dump/models/baseline_model_rnoise_fields_fused_ssh_wcurv_v4/0125_124657prevdays_7_activation_relu/",
-        "output_dir": "/unity/g2/jvelasco/ai_outs/ugos3/testing"
+        "testing":false,
+        "weights_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/training/models/baseline_model_rnoise_fields_fused_ssh_v2/0128_164606prevdays_7_activation_relu/",
+        "output_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/testing"
     }
 }

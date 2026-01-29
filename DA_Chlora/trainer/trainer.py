@@ -92,11 +92,8 @@ class Trainer(BaseTrainer):
 
             output = self.model(data)
             # Create a mask for the valid points
-            mask = data[0, -1, :, :]
-            valid_points = torch.sum(mask) + 1e-8
-
             mask = data[:, -1, :, :].unsqueeze(1)  # [B,1,H,W]
-            valid_points = mask.sum()
+            valid_points = torch.sum(mask) 
             #print(f"Output shape: {output.shape}")
             #print(f"Target shape: {target.shape}")
 
@@ -130,8 +127,8 @@ class Trainer(BaseTrainer):
             output_loss = ((output - target)**2 * mask).sum() / valid_points
             gradient_loss = ((output_gradient - target_gradient)**2 * mask).sum() / valid_points
 
-            w_curvature = 0.05
-            w_gradient = 0.1
+            w_curvature = 0.5
+            w_gradient = 0.9
             w_output = 1.0
             # print(f"Output loss: {output_loss}, Gradient loss: {gradient_loss}")
             loss = (output_loss * w_output + gradient_loss * w_gradient + curvature_loss * w_curvature) / (w_output + w_gradient + w_curvature + eps)
@@ -222,8 +219,8 @@ class Trainer(BaseTrainer):
                 output_loss = ((output - target)**2 * mask).sum() / valid_points
                 gradient_loss = ((output_gradient - target_gradient)**2 * mask).sum() / valid_points
 
-                w_curvature = 0.0
-                w_gradient = 1.0
+                w_curvature = 0.5
+                w_gradient = 0.9
                 w_output = 1.0
                 # print(f"Output loss: {output_loss}, Gradient loss: {gradient_loss}")
                 loss = (output_loss * w_output + gradient_loss * w_gradient + curvature_loss * w_curvature) / (w_output + w_gradient + w_curvature + eps)

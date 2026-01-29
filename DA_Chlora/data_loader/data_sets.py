@@ -12,6 +12,7 @@ from data_loader.loader_utils import *
 import matplotlib.pyplot as plt
 import re
 import glob
+import cv2
 
 # Function to apply StandardScaler to an array and persist the scaler
 def scale_data_dataset(data, scalers, name, training=True):
@@ -75,9 +76,9 @@ class SimSatelliteDataset:
         self.plot_data = plot_data
         self.dataset_type = dataset_type
         # Input variables
-        # Var order {0:sst, 1:LOG(CHLORA), 2:ssh_track, 3:swot}
-        input_vars = ["sst", "chlora", "ssh_track", "swot"]
-        selected_vars = [0,1,2]
+        # Var order {0:sst, 1:LOG(CHLORA), 2:ssh_track, 3:swot, 4:fused_ssh}
+        input_vars = ["sst", "chlora", "ssh_track", "swot", "fused_ssh"]
+        selected_vars = [0,1,4]
         input_vars = [var for var in input_vars if var in selected_vars]
         output_vars = ["ssh"]
         all_var_names = input_vars + output_vars
@@ -181,12 +182,8 @@ class SimSatelliteDataset:
             print(f"Reading {pkl_file} file...")
             with open(training_pkl_path, "rb") as f:
                 X, self.Y, self.lats, self.lons = pickle.load(f)
-            alt_M = X[:, -2]
-            swot = X[:, -1]
-            fused = np.where(~np.isnan(alt_M), alt_M, swot)
             # Clipping unnecessary channels
             X = X[:, selected_vars]
-            X[:, -1] = fused
             self.X = X
             # assert self.X.shape[1] == 2, f"self.X.shape: {self.X.shape}"
 
@@ -194,6 +191,8 @@ class SimSatelliteDataset:
         self.gulf_mask = np.zeros_like(self.Y[0,:,:])
         # Create a mask for the Gulf of Mexico
         self.gulf_mask = np.where(~np.isnan(self.Y[0,:,:]), 1, 0)
+        # Dilate the mask
+        self.gulf_mask = cv2.dilate(self.gulf_mask.astype(np.uint8), np.ones((3,3), dtype=np.uint8), iterations=1)
         # Replace all the nan values in X and Y with 0s
         self.X = np.where(np.isnan(self.X), 0, self.X)
         self.Y = np.where(np.isnan(self.Y), 0, self.Y)
@@ -270,9 +269,6 @@ class SimSatelliteDataset:
             # Add the previous two states with some noise and its gradient
             X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise_ssh
             X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise_ssh
-            # X_with_mask[-2, :, :] = torch.tensor(groundto2background(self.Y[index-1, :, :].clone()).copy(), dtype=torch.float32)
-            # X_with_mask[-3, :, :] = torch.tensor(groundto2background(self.Y[index-2, :, :].clone()).copy(), dtype=torch.float32)
-
 
 
         # Only for testing purposes plot the input data

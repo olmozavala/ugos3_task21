@@ -78,11 +78,12 @@ def main(config):
     checkpoint = torch.load(weights_file, weights_only=False)
     state_dict = checkpoint['state_dict']
 
-    device, device_ids = prepare_device(config['n_gpu'])
+    #device, device_ids = prepare_device(config['n_gpu'])
+    device, device_ids = prepare_device(1)
     model = model.to(device)
 
-    if len(device_ids) > 1:
-        model = torch.nn.DataParallel(model)
+    #if len(device_ids) > 1:
+    model = torch.nn.DataParallel(model)
 
     model = torch.compile(model)
     model.load_state_dict(state_dict)
@@ -123,7 +124,7 @@ def main(config):
 
             # Plotting the output
             # For each batch plot the first 10 samples
-            for j in range(min(output.shape[0], 3)):
+            for j in range(min(output.shape[0], 2)):
                 ex_num = i*batch_size + j + 1
                 file_name = join(output_dir, f"{model_name}_ex_{ex_num:03d}.png")
                 plot_predictions(data[j].detach().cpu().numpy(), 

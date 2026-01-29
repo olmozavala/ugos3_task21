@@ -3,6 +3,7 @@ import torch
 from torchvision.utils import make_grid
 import torch.nn.functional as F
 from base import BaseTrainer
+import model.loss as module_loss
 from utils import inf_loop, MetricTracker
 
 
@@ -16,6 +17,9 @@ class TrainerAutoregressive(BaseTrainer):
         self.config = config
         self.device = device
         self.data_loader = data_loader
+        self.register_sobel_kernels()
+        self.register_curvature_kernels()
+        self.criterion 
         if len_epoch is None:
             print("Epoch-based training")
             # epoch-based training
@@ -32,6 +36,36 @@ class TrainerAutoregressive(BaseTrainer):
 
         self.train_metrics = MetricTracker('loss', *[m.__name__ for m in self.metric_ftns], writer=self.writer)
         self.valid_metrics = MetricTracker('loss', *[m.__name__ for m in self.metric_ftns], writer=self.writer)
+
+    def register_sobel_kernels(self):
+        sobel_x = torch.tensor([
+            [[-1, 0, 1],
+            [-2, 0, 2],
+            [-1, 0, 1]]], dtype=torch.float32)
+
+        sobel_y = torch.tensor([
+            [[-1, -2, -1],
+            [ 0,  0,  0],
+            [ 1,  2,  1]]], dtype=torch.float32)
+
+        # Reshape to [out_channels, in_channels, kH, kW]
+        self.sobel_kernel_x = sobel_x.unsqueeze(1).to(self.device)
+        self.sobel_kernel_y = sobel_y.unsqueeze(1).to(self.device)
+
+        # Make sure autograd does not track these
+        self.sobel_kernel_x.requires_grad_(False)
+        self.sobel_kernel_y.requires_grad_(False)
+
+    def register_curvature_kernels(self):
+        laplacian = torch.tensor([
+            [[ 0,  1,  0],
+            [ 1, -4,  1],
+            [ 0,  1,  0]]
+        ], dtype=torch.float32)
+
+        self.laplace_kernel = laplacian.unsqueeze(1).to(self.device)
+        self.laplace_kernel.requires_grad_(False)
+
 
     def _train_epoch(self, epoch):
         """
@@ -62,8 +96,8 @@ class TrainerAutoregressive(BaseTrainer):
             data, target = data.to(self.device), target.to(self.device)
 
             ii = 0  # This is the index for the previous predictions
-            sday = 4 # One day includes 4 channels (chlora, sst, altimeter, swot)
-            dc = 7 * sday # For now is hardcoded to 7 previous days and 4 channels (chlora, sst, altimeter, swot)
+            sday = 3 # One day includes 3 channels (chlora, sst, ssh(altimeter + swot))
+            dc = 7 * sday # For now is hardcoded to 7 previous days and 3 channels [chlora, sst, ssh(altimeter+swot)]
 
             ss = 0
 
@@ -80,65 +114,17 @@ class TrainerAutoregressive(BaseTrainer):
                 # Concatenate the batch to advance the predictions
                 data_step = torch.cat((data[:, ss:(ss+dc), :, :], data[:, -3:, :, :]), dim=1)
                 output = self.model(data_step)
-                # final_output[:, ii] = output.clone()
-                # Update the index for the previous predictions
-                ss += sday
-                # Define Sobel kernels for computing gradients along x and y directions
-                sobel_kernel_x = torch.tensor([[[-1, 0, 1],
-                                                [-2, 0, 2],
-                                                [-1, 0, 1]]], dtype=output.dtype, device=output.device)
 
-                sobel_kernel_y = torch.tensor([[[-1, -2, -1],
-                                                [ 0,  0,  0],
-                                                [ 1,  2,  1]]], dtype=output.dtype, device=output.device)
-
-                # Reshape kernels to match the conv2d weight shape: [out_channels, in_channels, kH, kW]
-                sobel_kernel_x = sobel_kernel_x.unsqueeze(1)  # Shape: [1, 1, 3, 3]
-                sobel_kernel_y = sobel_kernel_y.unsqueeze(1)  # Shape: [1, 1, 3, 3]
-                #print(f'sobel_kernel_x.shape: {sobel_kernel_x.shape}')
-                #print(f'sobel_kernel_y.shape: {sobel_kernel_y.shape}')
-                #print(final_output.shape)
-                
-
-                # Reshape kernels to match the conv2d weight shape: [1, in_channels, kH, kW]
-                #sobel_kernel_x = torch.cat((sobel_kernel_x, sobel_kernel_x), dim=1)  # Shape: [1, 2, 3, 3]
-                #sobel_kernel_y = torch.cat((sobel_kernel_y, sobel_kernel_y), dim=1)  # Shape: [1, 2, 3, 3]
-                #print(f'sobel_kernel_x.shape: {sobel_kernel_x.shape}')
-                #print(f'sobel_kernel_y.shape: {sobel_kernel_y.shape}')
-
-                #final_output = final_output.unsqueeze(1)  # Shape: [batch_size, num_days (2), height, width]
-                output = output.unsqueeze(1)  # Shape: [batch_size, 1, height, width]
-                #print(f'output.shape: {output.shape}')
-                #print(f'target.shape: {target.shape}')
-                #print(f'target[:,ii,:,:].shape: {target[:,ii,:,:].shape}')
-                # Compute gradients along x and y directions using conv2d
-                grad_output_x = F.conv2d(output, sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
-                grad_output_y = F.conv2d(output, sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
-
-                # Compute gradients of the target
-                grad_target_x = F.conv2d(target[:,ii,:,:].unsqueeze(1), sobel_kernel_x, padding=1)  # Shape: [batch_size, 1, height, width]
-                grad_target_y = F.conv2d(target[:,ii,:,:].unsqueeze(1), sobel_kernel_y, padding=1)  # Shape: [batch_size, 1, height, width]
-
-                # Compute the gradient magnitude (2D norm) for each element in the batch
-                grad_magnitude_output = torch.sqrt(grad_output_x ** 2 + grad_output_y ** 2)  # Shape: [batch_size, 1, height, width]
-                grad_magnitude_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2)  # Shape: [batch_size, 1, height, width]
-
-                # Normalize the gradients with mean 0 and std 1
-                output_gradient = (grad_magnitude_output - grad_magnitude_output.mean()) / grad_magnitude_output.std()
-                target_gradient = (grad_magnitude_target - grad_magnitude_target.mean()) / grad_magnitude_target.std()
-                    
-
-                # For debugging purposes plot one of the gradients
-                # import matplotlib.pyplot as plt
-                # plt.imshow(target_gradient[0, 0, :, :].cpu().numpy(), vmin=0, vmax=2)
-                # plt.colorbar()
-                # plt.savefig("target_gradient.png")
-                # plt.close()
-
-                # End of the loop for the previous predictions and computing the loss
+                data_step_mask = data_step[:, -1, :, :].unsqueeze(1)
+                valid_points = torch.sum(data_step_mask)
+                gradient_loss = gradient_loss(output, target[:,ii,:,:], self.sobel_kernel_x, self.sobel_kernel_y, data_step_mask, valid_points)
+                curvature_loss = curvature_loss(output, target[:,ii,:,:], self.laplace_kernel, data_step_mask, valid_points)
                 output_loss = self.criterion(output, target[:,ii,:,:])
-                gradient_loss = self.criterion(output_gradient, target_gradient)
-                step_loss = (output_loss + gradient_loss)/ 2 # because accumulation of the loss is 2 steps in this case
+
+                step_loss = (output_loss + gradient_loss + curvature_loss) / (1 + 1 + 1)
+                ss += sday
+                
+                
                 step_loss.backward(retain_graph=True)
                 loss += step_loss
 

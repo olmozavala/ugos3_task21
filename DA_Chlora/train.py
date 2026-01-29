@@ -10,10 +10,16 @@ import model.model as module_arch
 from parse_config import ConfigParser
 from trainer import Trainer
 from utils import prepare_device
+import os
 
 # Only for jvelasco (toch has some problems to compile models)
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
+
+print("CUDA_VISIBLE_DEVICES =", os.environ.get("CUDA_VISIBLE_DEVICES"))
+print("CUDA devices available:", torch.cuda.device_count())
+for i in range(torch.cuda.device_count()):
+    print(f"Device {i}: {torch.cuda.get_device_name(i)}")
 
 # fix random seeds for reproducibility
 SEED = 123

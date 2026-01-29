@@ -13,9 +13,6 @@ from utils import prepare_device
 from os.path import join
 import os
 
-# Specify the GPUs to use (GPU 1 and 2)
-#qos.environ["CUDA_VISIBLE_DEVICES"] = "3,4"
-
 # Only for jvelasco (toch has some problems to compile models)
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
@@ -62,19 +59,21 @@ device, device_ids = prepare_device(config['n_gpu'])
 #print(torch.cuda.device_count()))
 # model = model.to(device)
 #os.environ["CUDA_VISIBLE_DEVICES"]="1,2,3"
-device = torch.device("cuda:0")
 model = model.to(device)
 
-device_ids = [0,1,2,3]
 if len(device_ids) > 1:
     model = torch.nn.DataParallel(model, device_ids=device_ids)
 
-# OPTIMIZATION
+# Load the weights file
 weights_file = join("/unity/g2/jvelasco/ai_outs/task21_set1/training/models/Debug_model_gradient_mode_full_dataset/1023_132535prevdays_7_activation_relu",
                      'model_best.pth')
 weights = torch.load(weights_file, weights_only=False)
-# model.load_state_dict(weights['state_dict'])
+
+
+# OPTIMIZATION
 model = torch.compile(model)
+
+# Load the weights into the model
 model.load_state_dict(weights['state_dict'])
 
 # get function handles of loss and metrics
