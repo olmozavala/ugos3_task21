@@ -120,10 +120,6 @@ def main(config):
             target = target * std_ssh + mean_ssh
 
             # Plotting the output
-            #print(f"Shape of output: {output.shape}")
-            #print(f"Shape of target: {target.shape}")
-
-            # Plotting the output
             # For each batch plot the first 10 samples
             for j in range(min(output.shape[0], 2)):
                 ex_num = i*batch_size + j + 1
@@ -131,15 +127,6 @@ def main(config):
                 plot_predictions(data[j].detach().cpu().numpy(), 
                                  target[j].detach().cpu().numpy(), 
                                  output[j].detach().cpu().numpy(), file_name, lats, lons, dataset_type)
-            
-            #for j in range(previous_days, min(output.shape[0], previous_days + 10)):
-            # for j in range(output.shape[0]):
-            #    ex_num = i*batch_size + j + 1
-            #    file_name = join(output_dir, f"{model_name}_ex_{ex_num:03d}.png")
-            #    # print(f"Plotting example {ex_num} to {file_name}")
-            #    plot_predictions(data[j].detach().cpu().numpy(), 
-            #                     target[j].detach().cpu().numpy(), 
-            #                     output[j].detach().cpu().numpy(), file_name, lats, lons, dataset_type)
             
             # Mask-aware loss (same as training)
             loss = F.mse_loss(output * mask, target * mask, reduction='sum')

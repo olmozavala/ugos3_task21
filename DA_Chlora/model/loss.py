@@ -195,6 +195,38 @@ def mse_loss_with_mask(output: torch.Tensor, target: torch.Tensor, mask: torch.T
     mask_b1hw, valid = _valid_points_from_mask(mask, output, eps=1e-10)
     return (((output - target) ** 2) * mask_b1hw).sum() / valid
 
+def total_variation_loss(output: torch.Tensor, 
+                         target: torch.Tensor, 
+                         data: Optional[torch.Tensor] = None, 
+                         mask: Optional[torch.Tensor] = None, 
+                         eps: float = 1e-10) -> torch.Tensor:
+    """
+    Total variation loss (masked, mean over valid neighbor pairs).
+
+    Notes:
+    - `target` is unused (TV is a regularizer on `output`).
+    - If a mask is available, we only count differences where BOTH neighboring
+      pixels are valid.
+    """
+    output, target = _to_b1hw(output), _to_b1hw(target)
+    mask = _extract_mask(mask, data)
+    mask_b1hw, _ = _valid_points_from_mask(mask, output, eps=eps)
+
+    # Horizontal neighbor differences (along H)
+    diff_h = output[..., 1:, :] - output[..., :-1, :]
+    mask_h = mask_b1hw[..., 1:, :] * mask_b1hw[..., :-1, :]
+
+    # Vertical neighbor differences (along W)
+    diff_w = output[..., 1:] - output[..., :-1]
+    mask_w = mask_b1hw[..., 1:] * mask_b1hw[..., :-1]
+
+    tv_h = (diff_h.square() * mask_h).sum()
+    tv_w = (diff_w.square() * mask_w).sum()
+
+    denom = mask_h.sum() + mask_w.sum() + output.new_tensor(eps)
+    return (tv_h + tv_w) / denom
+
+
 
 # ----------------------------
 # Mask-aware terms used in Trainer (pixel / gradient / curvature)
@@ -223,6 +255,7 @@ def sobel_gradient_magnitude_loss(
     data: Optional[torch.Tensor] = None,
     mask: Optional[torch.Tensor] = None,
     normalize: bool = True,
+    regularization: str = "l2",
     eps: float = 1e-10,
 ) -> torch.Tensor:
     """
@@ -239,9 +272,21 @@ def sobel_gradient_magnitude_loss(
     grad_output_y = F.conv2d(output, ky, padding=1)
     grad_target_x = F.conv2d(target, kx, padding=1)
     grad_target_y = F.conv2d(target, ky, padding=1)
-
-    grad_x = (grad_output_x - grad_target_x)**2
-    grad_y = (grad_output_y - grad_target_y)**2
+    
+    # L1 norm
+    if regularization == "l1":
+        grad_x = torch.abs(grad_output_x - grad_target_x)
+        grad_y = torch.abs(grad_output_y - grad_target_y)
+    # L2 norm
+    elif regularization == "l2":
+        grad_x = (grad_output_x - grad_target_x)**2
+        grad_y = (grad_output_y - grad_target_y)**2
+    #L infinity norm
+    elif regularization == "linf":
+        grad_x = torch.max(torch.abs(grad_output_x - grad_target_x), torch.abs(grad_output_y - grad_target_y))
+        grad_y = torch.max(torch.abs(grad_output_x - grad_target_x), torch.abs(grad_output_y - grad_target_y))
+    else:
+        raise ValueError(f"Invalid regularization type: {regularization}", "Expected 'l1', 'l2', or 'linf'")
 
     total_grad = grad_x + grad_y
 

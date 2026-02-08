@@ -67,10 +67,7 @@ class Trainer(BaseTrainer):
                 raise ValueError("Loss is nan")
 
             loss.backward()
-            
-            # Clip gradients to prevent exploding gradients
-            # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.01, norm_type=1)
-
+        
             self.optimizer.step()
 
             self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)

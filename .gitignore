@@ -140,3 +140,5 @@ debug_*
 *.out
 *.err
 *.slurm
+# Images
+*.png

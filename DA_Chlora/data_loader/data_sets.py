@@ -91,6 +91,31 @@ def scale_data_dataset(data, scalers, name, training=True):
     scaled_data = np.where(np.isnan(data.data), np.nan, scaled_data)
     return scaled_data, scalers
 
+
+def clean_gulf_mask(mask, min_size=500):
+    # Ensure mask is uint8 binary (0 and 255)
+    mask_uint8 = (mask > 0).astype(np.uint8) * 255
+    
+    # 1. Remove small yellow "islands" in the land
+    # Find all connected components of valid pixels
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask_uint8, connectivity=8)
+    
+    cleaned_mask = np.zeros_like(mask_uint8)
+    for i in range(1, num_labels): # Skip background (label 0)
+        if stats[i, cv2.CC_STAT_AREA] >= min_size:
+            cleaned_mask[labels == i] = 255
+            
+    # 2. Fill small purple "pockmarks" (holes) in the ocean
+    # Invert, remove small components, invert back
+    inverted = cv2.bitwise_not(cleaned_mask)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(inverted, connectivity=8)
+    
+    filled_mask = np.zeros_like(inverted)
+    for i in range(1, num_labels):
+        if stats[i, cv2.CC_STAT_AREA] >= min_size:
+            filled_mask[labels == i] = 255
+            
+    return cv2.bitwise_not(filled_mask) / 255.0
 # %% Simulate DUACs background field
 def groundto2background(data, lat=(14.18613, 30.61901), lon=(-89.33899, -78.666664), 
                         x=712, y=648, resolution=0.25):
@@ -135,6 +160,8 @@ class SimSatelliteDataset:
         self.plot_data = plot_data
         self.dataset_type = dataset_type
 
+        self.valid_start_idx = self.previous_days
+
         # Input variables (canonical order used for stacking cached X)
         self.all_input_vars = list(all_input_vars) if all_input_vars is not None else list(DEFAULT_INPUT_VARS)
         # Var order {0:sst, 1:LOG(CHLORA), 2:ssh_track, 3:swot, 4:fused_ssh}
@@ -161,114 +188,27 @@ class SimSatelliteDataset:
 
         # Verify if 'training.pkl' file exists
         training_pkl_path = join(data_dir, pkl_file)
-        if not os.path.exists(training_pkl_path):
-            print(f"{pkl_file} file does not exist. Reading netcdfs...")
-            # Reads all the netcdfs in the data_dir
-            all_files = glob.glob(join(data_dir, "*.nc"))
-            pattern = re.compile(r".*_(\d+)\.nc$")
-            if training:
-                # In this case we should read 0 to 1582 and 1759 to 3340
-                if pkl_file == "training.pkl":
-                    filtered_files = [f for f in all_files if pattern.match(f) and (
-                        0 <= int(pattern.match(f).group(1)) <= 1582 or
-                    1759 <= int(pattern.match(f).group(1)) <= 3340)]
-                elif pkl_file == "training_small.pkl":
-                    filtered_files = [f for f in all_files if pattern.match(f) and (
-                        int(pattern.match(f).group(1)) <= 100)]
-                elif pkl_file == "training_full.pkl":
-                    # Use all the files
-                    filtered_files = all_files
-            else:
-                filtered_files = [f for f in all_files if pattern.match(f) and (
-                    1583 <= int(pattern.match(f).group(1)) <= 1758 or
-                    3340 <= int(pattern.match(f).group(1)) <= 3515
-                )]
 
-            # Sort the files
-            filtered_files.sort()
-
-            all_data = xr.open_mfdataset(filtered_files, engine="netcdf4", concat_dim="ex_num", combine="nested")
-            
-            # Rechunk the data so that ex_num is in a single chunk
-            all_data = all_data.chunk({'ex_num': 1})
-
-            lats = all_data.latitude
-            lons = all_data.longitude
-
-            self.lats = lats
-            self.lons = lons
-
-            # Apply log to the chlorophyll variable
-            all_data['chlora'] = np.log(all_data['chlora'])
-            # Make nans all the values that are 0s in ssh_track
-            all_data['ssh_track'].data = np.where(all_data['ssh_track'].data==0, np.nan, all_data['ssh_track'].data)
-
-            # If we are not training read the scalers from the file
-            if not training: 
-                print(f"Reading {scalers_file} file...")
-                with open(join(data_dir, scalers_file), "rb") as f:
-                    self.scalers = pickle.load(f)
-
-            # Apply the scaling function to each variable
-            for var_name in all_var_names:
-                print(f"Scaling {var_name}...")
-                norm_data, self.scalers = scale_data_dataset(all_data[var_name], self.scalers, var_name, training=training)
-                all_data[f'{var_name}_normalized'] = xr.DataArray(
-                    norm_data,
-                    dims=all_data[var_name].dims,
-                    coords=all_data[var_name].coords
-                )
-
-            if training:
-                # Saving the scalers
-                with open(join(data_dir, scalers_file), "wb") as f:
-                    print(f"Saving scalers to {join(data_dir, scalers_file)}...")
-                    pickle.dump(self.scalers, f)
-                    print("Scalers saved!")
-
-            if self.plot_data:
-                print("Plotting some data...")
-                for i in range(10):
-                    idx = np.random.randint(0, len(all_data.ex_num))
-                    plot_dataset_data(idx, all_data, lats, lons)
-             
-            print("Stack the data and assign to X and Y")
-            X_full = np.stack([all_data[var_name].compute().data for var_name in input_normalized_vars], axis=0)
-            Y = all_data[output_var].compute().data
-            # Flip the first and second dimensions in X
-            X_full = np.transpose(X_full, (1, 0, 2, 3))
-
-            # Keep full channels in cache, but use selected channels for this dataset instance.
-            if X_full.shape[1] >= (max(self.selected_var_indices) + 1):
-                X = X_full[:, self.selected_var_indices]
-            else:
-                # Backwards compatibility with any pre-clipped cached files.
-                X = X_full
-            self.X = X
-            self.Y = Y
-
-            print("Saving the training data...")
-            # Saving the training data
-            with open(training_pkl_path, "wb") as f:
-                # Store full X so future experiments can slice differently without regenerating.
-                pickle.dump((X_full, self.Y, self.lats, self.lons), f)
-            print("Training data saved!")
-        else:
-            print(f"Reading {pkl_file} file...")
-            with open(training_pkl_path, "rb") as f:
-                X, self.Y, self.lats, self.lons = pickle.load(f)
-            # Clip channels based on config selection, if the cached X has those channels.
-            if X.shape[1] >= (max(self.selected_var_indices) + 1):
-                X = X[:, self.selected_var_indices]
-            self.X = X
-            # assert self.X.shape[1] == 2, f"self.X.shape: {self.X.shape}"
+        print(f"Reading {pkl_file} file...")
+        with open(training_pkl_path, "rb") as f:
+            X, self.Y, self.lats, self.lons = pickle.load(f)
+        # Clip channels based on config selection, if the cached X has those channels.
+        if X.shape[1] >= (max(self.selected_var_indices) + 1):
+            X = X[:, self.selected_var_indices]
+        self.X = X
+        # assert self.X.shape[1] == 2, f"self.X.shape: {self.X.shape}"
 
         # Make a mask of the gulf of Mexico
         self.gulf_mask = np.zeros_like(self.Y[0,:,:])
         # Create a mask for the Gulf of Mexico
         self.gulf_mask = np.where(~np.isnan(self.Y[0,:,:]), 1, 0)
-        # Dilate the mask
-        self.gulf_mask = cv2.dilate(self.gulf_mask.astype(np.uint8), np.ones((3,3), dtype=np.uint8), iterations=1)
+        # Remove Pacific Ocean region
+        self.gulf_mask[:100, :300] = 0
+
+        # Erode the mask
+        self.gulf_mask = cv2.erode(self.gulf_mask.astype(np.uint8), np.ones((3,3), dtype=np.uint8), iterations=3)
+        self.gulf_mask = clean_gulf_mask(self.gulf_mask, min_size=1000).astype(np.uint8)
+
         # Replace all the nan values in X and Y with 0s
         self.X = np.where(np.isnan(self.X), 0, self.X)
         self.Y = np.where(np.isnan(self.Y), 0, self.Y)
@@ -280,8 +220,8 @@ class SimSatelliteDataset:
         # Crop the last two dimensions to the largest dimension divisible by 8
         new_height = (self.X.shape[2] // 8) * 8
         new_width = (self.X.shape[3] // 8) * 8
-        self.X = self.X[:, :, :new_height, :new_width]
-        self.Y = self.Y[:, :new_height, :new_width]
+        self.X = self.X[..., :new_height, :new_width]
+        self.Y = self.Y[..., :new_height, :new_width]
         self.gulf_mask = self.gulf_mask[:new_height, :new_width]
         
         if dataset_type == "regular":
@@ -294,16 +234,19 @@ class SimSatelliteDataset:
             # + 5 because of the Gulf Mask, and the two previous states with some noise and the gradient (2 * 2)
             self.tot_inputs = self.X.shape[1] * self.previous_days + 3
 
-
         # Make the mask a float32 tensor
         self.gulf_mask = torch.tensor(self.gulf_mask, dtype=torch.float32)
 
         # Get the length of the dataset
-        self.length = self.Y.shape[0]
+        end_cutoff = 0
         if self.dataset_type == "extended":
-            self.length = self.length - 2
+            end_cutoff = 2
         if self.dataset_type == "gradient":
-            self.length = self.length - 2
+            end_cutoff = 2
+
+        # 3. Calculate effective length
+        # Total available - start offset - end cutoff
+        self.length = self.Y.shape[0] - self.valid_start_idx - end_cutoff
 
         # # Verify the dimensions
         print(f"X shape: {self.X.shape}")
@@ -315,8 +258,7 @@ class SimSatelliteDataset:
 
     def __getitem__(self, index):
         # Append the Gulf Mask to the X array
-        if index <= self.previous_days:
-            index = self.previous_days + 1
+        real_index = index + self.valid_start_idx
 
         X_with_mask = np.zeros((self.tot_inputs, self.X.shape[2], self.X.shape[3]), dtype=np.float32)
 
@@ -327,24 +269,24 @@ class SimSatelliteDataset:
             start_index = i * size_per_day
             end_idx = (i * size_per_day) + size_per_day
             # print(f"start_index: {start_index}, end_idx: {end_idx}. Index: {index - self.previous_days + i + 1}. Original index: {index}")
-            X_with_mask[start_index : end_idx, :, :] = self.X[index - self.previous_days + i + 1, :, :, :]
+            X_with_mask[start_index : end_idx, :, :] = self.X[real_index - self.previous_days + i + 1, :, :, :]
         
         # Add the Gulf Mask as the last channel
         X_with_mask[-1, :, :] = self.gulf_mask
 
         if self.dataset_type == "extended":
-            noise_level = 0.5  # Default is 0.5 low is 0.1
+            noise_level = 0.2  # Default is 0.5 low is 0.1
             noise = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level
             # Add the previous two states with some noise at locations -2 and -3
-            X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise
-            X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise
+            X_with_mask[-2, :, :] = self.Y[real_index-1, :, :] + noise
+            X_with_mask[-3, :, :] = self.Y[real_index-2, :, :] + noise
 
         if self.dataset_type == "gradient":
             noise_level_ssh = 0.2
             noise_ssh = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level_ssh
             # Add the previous two states with some noise and its gradient
-            X_with_mask[-2, :, :] = self.Y[index-1, :, :] + noise_ssh
-            X_with_mask[-3, :, :] = self.Y[index-2, :, :] + noise_ssh
+            X_with_mask[-2, :, :] = self.Y[real_index-1, :, :] + noise_ssh
+            X_with_mask[-3, :, :] = self.Y[real_index-2, :, :] + noise_ssh
 
 
         # Only for testing purposes plot the input data
@@ -355,7 +297,7 @@ class SimSatelliteDataset:
                                       f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_example_{index}.jpg",
                                       self.lats, self.lons, dataset_type=self.dataset_type)
 
-        return X_with_mask, self.Y[index].unsqueeze(0)
+        return X_with_mask, self.Y[real_index].unsqueeze(0)
 
     def get_scaler(self):
         return self.scaler
@@ -380,7 +322,7 @@ if __name__ == "__main__":
 
     # Create an instance of the SimSatelliteDataset
     dataset = SimSatelliteDataset(data_dir, previous_days=previous_days, transform=None,
-                                   plot_data=plot_data, training=training, dataset_type=dataset_type, selected_vars=input_vars)
+                                   plot_data=plot_data, training=training, dataset_type=dataset_type, input_vars=input_vars)
 
     # Create a data loader for the dataset
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
