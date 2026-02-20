@@ -17,6 +17,7 @@ import numpy as np
 from data_loader.loader_utils import plot_predictions
 import xarray as xr
 import torch.nn.functional as F
+from dynamic_functions import compute_psd, plot_psd
 
 # Only for jvelasco (toch has some problems to compile models)
 import torch._dynamo
@@ -99,8 +100,10 @@ def main(config):
     # Read the lats and lons from 
     lats = data_loader.dataset.lats
     lons = data_loader.dataset.lons
-
+    save_predictions = False
     validation_loss = []
+    psd_output_list = []
+    psd_target_list = []
     with torch.no_grad():
         for i, (data, target) in enumerate(tqdm(data_loader)):
             if i == 0:
@@ -116,8 +119,8 @@ def main(config):
 
             # computing loss, metrics on test set
             # Scale the output and target
-            output = output * std_ssh + mean_ssh
-            target = target * std_ssh + mean_ssh
+            output = output * torch.tensor(std_ssh).to(device) + torch.tensor(mean_ssh).to(device)
+            target = target * torch.tensor(std_ssh).to(device) + torch.tensor(mean_ssh).to(device)
 
             # Plotting the output
             # For each batch plot the first 10 samples
@@ -127,6 +130,20 @@ def main(config):
                 plot_predictions(data[j].detach().cpu().numpy(), 
                                  target[j].detach().cpu().numpy(), 
                                  output[j].detach().cpu().numpy(), file_name, lats, lons, dataset_type)
+                # Compute the PSD of the output and target
+                psd_output = compute_psd(output[j].detach().cpu().numpy() - mean_ssh, lats, lons)
+                psd_target = compute_psd(target[j].detach().cpu().numpy() - mean_ssh, lats, lons)
+                plot_psd([psd_output, psd_target], add_reference=True, labels=["ML spectrum", "Target spectrum"], path=output_dir, filename=f"{model_name}_ex_{ex_num:03d}_psd.png")
+                #print(f"PSD of output: {output_dir}")
+
+            for ii in range(output.shape[0]):
+                psd_output = compute_psd(output[ii].detach().cpu().numpy() - mean_ssh, lats, lons)
+                psd_target = compute_psd(target[ii].detach().cpu().numpy() - mean_ssh, lats, lons)
+                if ii == 0:
+                    k_bins = psd_output[1]
+                
+                psd_output_list.append(psd_output[0])
+                psd_target_list.append(psd_target[0])
             
             # Mask-aware loss (same as training)
             loss = F.mse_loss(output * mask, target * mask, reduction='sum')
@@ -165,6 +182,22 @@ def main(config):
         for loss in validation_loss:
             f.write(f"{loss}\n")
 
+    psd_output_array = np.array(psd_output_list).mean(axis=0)
+    psd_target_array = np.array(psd_target_list).mean(axis=0)
+    plot_psd([(psd_output_array, k_bins), (psd_target_array, k_bins)], 
+             add_reference=True, labels=["ML spectrum", "DUACS spectrum"], 
+             path=output_dir,
+             title="Mean PSD of the output and target",
+             filename=f"mean_psd.png")
+
+    # save pkl with the psd_output and psd_target
+    with open(join(output_dir, "psd_output.pkl"), "wb") as f:
+        pickle.dump(psd_output_list, f)
+    with open(join(output_dir, "psd_target.pkl"), "wb") as f:
+        pickle.dump(psd_target_list, f)
+    with open(join(output_dir, "k_bins.pkl"), "wb") as f:
+        pickle.dump(k_bins, f)
+
     # Make a scatter plot of the validation loss
     mean_rmse = np.mean(validation_loss)
     plt.figure()
@@ -201,23 +234,3 @@ if __name__ == '__main__':
 
     config = ConfigParser.from_args(args)
     main(config)
-
-# %% Redoo RMSE plot
-# Read the RMSE from the csv file
-folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_extended_dataset/"
-# folder = "/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/testing/UNet_with_upsample_AdamW_Wdecay_1e-4_opt_on_regular_sep_validation"
-file_name = join(folder, "loss.csv")
-rmse_data = np.loadtxt(file_name, delimiter=",")
-mean_rmse = np.mean(rmse_data)
-vmin = 0.005
-vmax = 0.030
-# Make a scatter plot of the RMSE
-plt.figure()
-plt.scatter(range(len(rmse_data)), rmse_data)
-plt.xlabel("Examples from validation set")
-plt.ylabel("RMSE (m)")
-plt.title(f"Mean RMSE: {mean_rmse:.4f} m")
-# Set the x and y limits
-plt.ylim(vmin, vmax)
-plt.savefig(join(folder, "validation_loss.png"), dpi=300, bbox_inches='tight')
-plt.close()

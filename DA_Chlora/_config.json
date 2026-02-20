@@ -1,5 +1,5 @@
 {
-    "name": "baseline_model_rnoise_fields_fused_ssh_curvature",
+    "name": "baseline_model_rnoise_fields_nochl_curvature",
     "n_gpu": 2,
     "mode": "training",
     "dataset_type_opts": [
@@ -11,7 +11,7 @@
         "type": "UNet",
         "args": {
             "previous_days": 7,
-            "in_channels": 3,
+            "in_channels": null,
             "start_filters": 32,
             "num_levels": 4,
             "kernel_size": 3,
@@ -36,7 +36,6 @@
             "dataset_type": "gradient",
             "input_vars": [
                 "sst",
-                "chlora",
                 "fused_ssh"
             ]
         }
@@ -55,10 +54,17 @@
         },
         {
             "name": "sobel_gradient_magnitude_loss",
-            "weight": 1.0,
+            "weight": 0.01,
             "args": {
-                "normalize": true,
+                "normalize": false,
                 "regularization": "l2"
+            }
+        },
+        {
+            "name": "laplacian_curvature_loss",
+            "weight": 0.25,
+            "args": {
+                "normalize": false
             }
         }
     ],
@@ -81,7 +87,7 @@
     },
     "tester": {
         "testing": false,
-        "weights_dir": "/unity/g2/jvelasco/ai_outs/baseline_v2/training/models/baseline_model_rnoise_fields_fused_ssh_curvature/0218_211230prevdays_7_activation_relu/",
-        "output_dir": "/unity/g2/jvelasco/ai_outs/baseline_v2/testing/"
+        "weights_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/training/models/baseline_model_rnoise_fields_fused_ssh_curvature/0208_170510prevdays_7_activation_relu/",
+        "output_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/testing/"
     }
 }

@@ -13,7 +13,8 @@ import matplotlib.pyplot as plt
 import re
 import glob
 import cv2
-
+from scipy.ndimage import gaussian_filter
+import pandas as pd
 # Canonical variable order for stacking X in the cached pkl.
 # IMPORTANT: indices in config refer to this ordering.
 DEFAULT_INPUT_VARS = ["sst", "chlora", "ssh_track", "swot", "fused_ssh"]
@@ -117,25 +118,48 @@ def clean_gulf_mask(mask, min_size=500):
             
     return cv2.bitwise_not(filled_mask) / 255.0
 # %% Simulate DUACs background field
-def groundto2background(data, lat=(14.18613, 30.61901), lon=(-89.33899, -78.666664), 
-                        x=712, y=648, resolution=0.25):
-    downsampled_lats = np.arange(lat[0], lat[1], resolution)
-    downsampled_lons = np.arange(lon[0], lon[1], resolution)
-    upsampled_lats = np.linspace(lat[0], lat[1], y)
-    upsampled_lons = np.linspace(lon[0], lon[1], x)
+def groundto2background(data, lat, lon, resolution=0.125):
+    time = np.arange(data.shape[0])
+    downsampled_lats = np.arange(lat[0], lat[-1]+ resolution/2, resolution)
+    downsampled_lons = np.arange(lon[0], lon[-1]+ resolution/2, resolution)
 
-    ds = xr.Dataset({'ssh': (['latitude', 'longitude'], data)},
-                    coords={'latitude': ('latitude', upsampled_lats),
-                            'longitude': ('longitude', upsampled_lons)})
+    ds = xr.Dataset({'ssh': (['time', 'latitude', 'longitude'], data)},
+                    coords={'time': ('time', time),
+                            'lat': ('lat', lat),
+                            'lon': ('lon', lon)})
     ds = ds.interp(
-        latitude=downsampled_lats, 
-        longitude=downsampled_lons, 
+        lat=downsampled_lats, 
+        lon=downsampled_lons, 
         method='linear').interp(
-            latitude=upsampled_lats, 
-            longitude=upsampled_lons, 
+            lat=lat, 
+            lon=lon, 
             method='linear')
     ds.ssh.data = np.where(np.isnan(ds.ssh.data), 0, ds.ssh.data)
-    return ds.ssh.data
+    return torch.tensor(ds.ssh.data, dtype=torch.float32)
+
+
+def gaussian_kernel(size: int, sigma: float):
+    """Creates a 2D Gaussian kernel."""
+    x = torch.arange(size) - size // 2
+    x = x.repeat(size, 1)
+    y = x.T
+    kernel = torch.exp(-(x**2 + y**2) / (2 * sigma**2))
+    return kernel / kernel.sum()
+
+
+def low_pass_filter(tensor, kernel_size=7, sigma=5):
+    """Applies a Gaussian low-pass filter to a 2D tensor."""
+    tensor = torch.tensor(tensor, dtype=torch.float32)
+    # Create Gaussian kernel
+    kernel = gaussian_kernel(kernel_size, sigma)
+    kernel = kernel.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+    
+    # Apply convolution
+    tensor = tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+    filtered_tensor = torch.nn.functional.conv2d(tensor, kernel, padding=kernel_size//2)
+    # Remove nan values in case there are any
+    filtered_tensor = torch.where(torch.isnan(filtered_tensor), torch.tensor(0, dtype=filtered_tensor.dtype, device=filtered_tensor.device), filtered_tensor)
+    return filtered_tensor.squeeze()
 
 class SimSatelliteDataset:
     # Total 1758*2 = 3516 training examples
@@ -159,6 +183,7 @@ class SimSatelliteDataset:
         self.previous_days = previous_days
         self.plot_data = plot_data
         self.dataset_type = dataset_type
+        self.dt = np.timedelta64(1, 'D')
 
         self.valid_start_idx = self.previous_days
 
@@ -191,13 +216,14 @@ class SimSatelliteDataset:
 
         print(f"Reading {pkl_file} file...")
         with open(training_pkl_path, "rb") as f:
-            X, self.Y, self.lats, self.lons = pickle.load(f)
+            X, self.Y, self.lats, self.lons, self.time = pickle.load(f)
         # Clip channels based on config selection, if the cached X has those channels.
         if X.shape[1] >= (max(self.selected_var_indices) + 1):
             X = X[:, self.selected_var_indices]
         self.X = X
         # assert self.X.shape[1] == 2, f"self.X.shape: {self.X.shape}"
-
+        # Load the MDT normalized data
+        self.mdt_normalized = xr.open_dataset(join(data_dir, "mdt_normalized.nc")).load()
         # Make a mask of the gulf of Mexico
         self.gulf_mask = np.zeros_like(self.Y[0,:,:])
         # Create a mask for the Gulf of Mexico
@@ -212,7 +238,9 @@ class SimSatelliteDataset:
         # Replace all the nan values in X and Y with 0s
         self.X = np.where(np.isnan(self.X), 0, self.X)
         self.Y = np.where(np.isnan(self.Y), 0, self.Y)
-
+        # Convert nan values in mdt_normalized to 0
+        self.mdt_normalized.ssh.data = np.where(np.isnan(self.mdt_normalized.ssh.data), 0, self.mdt_normalized.ssh.data)
+        
         #  Make tensors
         self.X = torch.tensor(self.X, dtype=torch.float32)
         self.Y = torch.tensor(self.Y, dtype=torch.float32)
@@ -223,7 +251,12 @@ class SimSatelliteDataset:
         self.X = self.X[..., :new_height, :new_width]
         self.Y = self.Y[..., :new_height, :new_width]
         self.gulf_mask = self.gulf_mask[:new_height, :new_width]
-        
+
+        self.lats = self.lats[:new_height]
+        self.lons = self.lons[:new_width]
+        self.mdt_normalized = self.mdt_normalized.isel(lat=slice(None, new_height), 
+                                                       lon=slice(None, new_width)).load()
+
         if dataset_type == "regular":
             # +1 because of the Gulf Mask
             self.tot_inputs = self.X.shape[1] * self.previous_days + 1
@@ -275,26 +308,39 @@ class SimSatelliteDataset:
         X_with_mask[-1, :, :] = self.gulf_mask
 
         if self.dataset_type == "extended":
-            noise_level = 0.2  # Default is 0.5 low is 0.1
-            noise = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level
+            #noise_level = 0.2  # Default is 0.5 low is 0.1
+            #noise = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level
             # Add the previous two states with some noise at locations -2 and -3
-            X_with_mask[-2, :, :] = self.Y[real_index-1, :, :] + noise
-            X_with_mask[-3, :, :] = self.Y[real_index-2, :, :] + noise
+            #X_with_mask[-2, :, :] = self.aux_Y[real_index-1, :, :]# + noise
+            #X_with_mask[-3, :, :] = self.aux_Y[real_index-2, :, :]# + noise
+            time_index = np.datetime64(self.time[real_index])
+            t1 = time_index - self.dt
+            t2 = t1 - self.dt
+            doy1 = int(pd.Timestamp(t1).day_of_year)
+            doy2 = int(pd.Timestamp(t2).day_of_year)
+            X_with_mask[-2, :, :] =self.mdt_normalized.ssh.sel(dayofyear=doy1).data
+            X_with_mask[-3, :, :] =self.mdt_normalized.ssh.sel(dayofyear=doy2).data
 
         if self.dataset_type == "gradient":
-            noise_level_ssh = 0.2
-            noise_ssh = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level_ssh
+            #noise_level_ssh = 0.2
+            #noise_ssh = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level_ssh
             # Add the previous two states with some noise and its gradient
-            X_with_mask[-2, :, :] = self.Y[real_index-1, :, :] + noise_ssh
-            X_with_mask[-3, :, :] = self.Y[real_index-2, :, :] + noise_ssh
-
+            # X_with_mask[-2, :, :] = self.aux_Y[real_index-1, :, :]
+            # X_with_mask[-3, :, :] = self.aux_Y[real_index-2, :, :]
+            time_index = np.datetime64(self.time[real_index])
+            t1 = time_index - self.dt
+            t2 = t1 - self.dt
+            doy1 = int(pd.Timestamp(t1).day_of_year)
+            doy2 = int(pd.Timestamp(t2).day_of_year)
+            X_with_mask[-2, :, :] =self.mdt_normalized.ssh.sel(dayofyear=doy1).data
+            X_with_mask[-3, :, :] =self.mdt_normalized.ssh.sel(dayofyear=doy2).data
 
         # Only for testing purposes plot the input data
         if self.plot_data:
             input_names = ["chl", "ssh_track", "swot"]
             plot_single_batch_element(X_with_mask, self.Y[index], input_names, self.previous_days, 
                                       #f"/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/batch_example_{index}.jpg",
-                                      f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_example_{index}.jpg",
+                                      f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_validation_example_{index}.jpg",
                                       self.lats, self.lons, dataset_type=self.dataset_type)
 
         return X_with_mask, self.Y[real_index].unsqueeze(0)
@@ -311,10 +357,11 @@ class SimSatelliteDataset:
 
 if __name__ == "__main__":
 # Main function to test the dataset
-    data_dir = "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"
+    #data_dir = "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"
+    data_dir = "/unity/g2/jvelasco/dataset/ugos/datasets_v2/"
     batch_size = 1
     training = False
-    plot_data = True
+    plot_data = False
     previous_days = 7
     dataset_type = "gradient"
     shuffle = True

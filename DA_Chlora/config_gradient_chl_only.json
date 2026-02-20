@@ -1,7 +1,7 @@
 {
-    "name": "baseline_model_rnoise_fields_fused_ssh_spectral",
+    "name": "baseline_model_fused_ssh_chl_gradient_mdtlike_background",
     "n_gpu": 2,
-    "mode": "testing",
+    "mode": "training",
     "dataset_type_opts": [
         "regular",
         "extended",
@@ -11,7 +11,7 @@
         "type": "UNet",
         "args": {
             "previous_days": 7,
-            "in_channels": 3,
+            "in_channels": null,
             "start_filters": 32,
             "num_levels": 4,
             "kernel_size": 3,
@@ -26,8 +26,8 @@
     "data_loader": {
         "type": "DefaultDataLoader",
         "args": {
-            "data_dir": "/unity/g2/jvelasco/dataset/ugos/new_datasets/",
-            "batch_size": 40,
+            "data_dir": "/unity/g2/jvelasco/dataset/ugos/datasets_v2/",
+            "batch_size": 48,
             "shuffle": true,
             "validation_split": 0.1,
             "num_workers": 10,
@@ -35,7 +35,6 @@
             "horizon_days": 2,
             "dataset_type": "gradient",
             "input_vars": [
-                "sst",
                 "chlora",
                 "fused_ssh"
             ]
@@ -55,15 +54,11 @@
         },
         {
             "name": "sobel_gradient_magnitude_loss",
-            "weight": 0.05,
+            "weight": 1.0,
             "args": {
                 "normalize": false,
                 "regularization": "l2"
             }
-        },
-        {
-            "name": "spectral_logloss",
-            "weight": 0.1
         }
     ],
     "metrics": [],
@@ -76,7 +71,7 @@
     },
     "trainer": {
         "epochs": 500,
-        "save_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/training_dump",
+        "save_dir": "/unity/g2/jvelasco/ai_outs/baseline_v2/training_dump",
         "save_period": 1,
         "verbosity": 2,
         "monitor": "min val_loss",
@@ -85,7 +80,7 @@
     },
     "tester": {
         "testing": false,
-        "weights_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/training/models/baseline_model_rnoise_fields_fused_ssh_spectral/0130_195229prevdays_7_activation_relu/",
-        "output_dir": "/unity/g2/jvelasco/ai_outs/baseline_new/testing"
+        "weights_dir": "/unity/g2/jvelasco/ai_outs/baseline_v2/training/models/baseline_model_fused_ssh_chl_gradient_lowres_background_nosst/0219_163830prevdays_7_activation_relu/",
+        "output_dir": "/unity/g2/jvelasco/ai_outs/baseline_v2/testing/"
     }
 }
