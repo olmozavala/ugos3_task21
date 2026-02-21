@@ -355,6 +355,12 @@ class SimSatelliteDataset:
         return self.scaler.inverse_transform(x)
 
 
+    def get_coords(self):
+        """
+        Get the coordinates of the dataset
+        """
+        return self.lats, self.lons, self.time[self.valid_start_idx:]
+
 if __name__ == "__main__":
 # Main function to test the dataset
     #data_dir = "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"

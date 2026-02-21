@@ -11,226 +11,444 @@ from parse_config import ConfigParser
 from utils import prepare_device
 from os.path import join
 import os
-import json
+import yaml
 import matplotlib.pyplot as plt
 import numpy as np
-from data_loader.loader_utils import plot_predictions
 import xarray as xr
 import torch.nn.functional as F
 from dynamic_functions import compute_psd, plot_psd
-
-# Only for jvelasco (toch has some problems to compile models)
+import cmocean.cm as cmo
+import pandas as pd
+from concurrent.futures import ProcessPoolExecutor, as_completed
+# Only for jvelasco (torch has some problems to compile models)
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
-# %%
+
+styles = {
+    "sst": cmo.thermal,
+    "chlora": cmo.algae,
+    "ssh": cmo.balance,
+    "ssh_track": cmo.balance,
+    "swot": cmo.balance,
+    "fused_ssh": cmo.balance,
+}
+
+# ------------------------------------------------------
+
+def plot_data(data: np.ndarray,
+              target: np.ndarray,
+              previous_days: int,
+              file_name: str, 
+              lats: np.ndarray, 
+              lons: np.ndarray, 
+              input_vars: list[str],
+              time):
+    """
+    Plot the data
+    """
+    frame_time = np.datetime64(time)
+    formatted_time = pd.Timestamp(frame_time).strftime('%Y-%m-%d')
+    X_masked = np.copy(data)
+    for i in range(X_masked.shape[0]-1):
+        X_masked[i, :, :] = np.where(X_masked[-1, :, :] == 0, np.nan, X_masked[i, :, :])
+
+
+    fig, ax = plt.subplots(len(input_vars), previous_days + 2, 
+                            figsize=(11*int(np.ceil((previous_days+1)/2)), 4*len(input_vars)))
+    
+    for ii, var in enumerate(input_vars):
+        for jj in range(previous_days):
+            cur_index = jj * len(input_vars) + ii
+
+            ax[ii, jj].pcolormesh(lons, lats, X_masked[cur_index, :, :], cmap=styles[var])
+            ax[ii, jj].set_title(f"{var} at {previous_days - jj} days before")
+    ax[0, -2].pcolormesh(lons, lats, X_masked[-3, :, :], cmap=styles["ssh"])
+    ax[0, -2].set_title("Mean SSH 2 days before")
+    ax[1, -2].pcolormesh(lons, lats, X_masked[-2, :, :], cmap=styles["ssh"])
+    ax[1, -2].set_title("Mean SSH 1 day before")
+    ax[0, -1].pcolormesh(lons, lats, X_masked[-1, :, :], cmap="gray")
+    ax[0, -1].set_title("Gulf Mask")
+    ax[1, -1].pcolormesh(lons, lats, target, cmap=styles["ssh"])
+    ax[1, -1].set_title("Target SSH")
+
+    fig.suptitle(f"Data for {formatted_time}", y=1, fontsize=18)
+    fig.savefig(file_name, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    
+
+def plot_predictions(
+                     target: np.ndarray,
+                     output: np.ndarray, 
+                     file_name: str, 
+                     lats: np.ndarray, 
+                     lons: np.ndarray, 
+                     time):
+    """
+    Plot the predictions
+    """
+    #print(f"Time: {time}")
+    frame_time = np.datetime64(time)
+    formatted_time = pd.Timestamp(frame_time).strftime('%Y-%m-%d')
+    grad_true = np.gradient(target)
+    grad_pred = np.gradient(output)
+    mag_true = np.sqrt(grad_true[0]**2 + grad_true[1]**2)
+    mag_pred = np.sqrt(grad_pred[0]**2 + grad_pred[1]**2)
+    
+    diff_ssh = target - output
+    diff_ssh_grad = mag_true - mag_pred
+    # Percentil 95 of the target and output
+    target_95 = np.percentile(np.abs(target), 95)
+    output_95 = np.percentile(np.abs(output), 95)
+    diff_ssh_95 = np.percentile(np.abs(diff_ssh), 95)
+    diff_ssh_grad_95 = np.percentile(np.abs(diff_ssh_grad), 95)
+    vmax = np.max([target_95, output_95])
+    vmax_diff = np.max([diff_ssh_95])
+    vmax_diff_grad = np.max([diff_ssh_grad_95])
+    # Percentil 99 of the gradient of the target and output
+    gradient_target_99 = np.percentile(np.abs(grad_true), 99)
+    gradient_output_99 = np.percentile(np.abs(grad_pred), 99)
+    vmax_gradient = np.max([gradient_target_99, gradient_output_99])
+    fig, ax = plt.subplots(2, 3, figsize=(20, 10))
+    ax = ax.flatten()
+    img1 =ax[0].pcolormesh(lons, lats, target, vmin=-vmax, vmax=vmax, cmap=cmo.balance)
+    plt.colorbar(img1)
+    ax[0].set_title('Target SSH')
+
+    img2 = ax[1].pcolormesh(lons, lats, output, vmin=-vmax, vmax=vmax, cmap=cmo.balance)
+    plt.colorbar(img2)
+    ax[1].set_title('Output SSH')
+
+    img3 = ax[2].pcolormesh(lons, lats, diff_ssh, vmin=-vmax_diff, vmax=vmax_diff,cmap=cmo.balance)
+    plt.colorbar(img3)
+    ax[2].set_title('Difference SSH')
+
+    img4 = ax[3].pcolormesh(lons, lats, mag_true, vmin=0, vmax=vmax_gradient, cmap=cmo.balance)
+    plt.colorbar(img4)
+    ax[3].set_title('Gradient of True SSH')
+
+    img5 = ax[4].pcolormesh(lons, lats, mag_pred, vmin=0, vmax=vmax_gradient, cmap=cmo.balance)
+    plt.colorbar(img5)
+    ax[4].set_title('Gradient of Output SSH')
+
+    img6 = ax[5].pcolormesh(lons, lats, diff_ssh_grad, vmin=0, vmax=vmax_diff_grad, cmap=cmo.rain)
+    plt.colorbar(img6)
+    ax[5].set_title('Difference Gradient of SSH')
+
+    plt.tight_layout()
+    fig.suptitle(f"Prediction for {formatted_time}", y=1.1, fontsize=18)
+    plt.savefig(file_name, dpi=300, bbox_inches='tight')
+    plt.close()
+
+
+def _plot_one_sample(args):
+    """
+    Worker for parallel plotting: run plot_predictions, plot_data, and plot_psd
+    for a single sample. Must be a top-level function for ProcessPoolExecutor.
+    """
+    (target_np, output_np, mask_np, data_np, ex_num, sample_time, output_dir,
+     model_name, lats, lons, days_before, input_vars, mean_ssh) = args
+    target_m = target_np * mask_np
+    output_m = output_np * mask_np
+    plot_predictions(
+        target_m, output_m,
+        join(output_dir, f"{model_name}_ex_{ex_num:03d}_predictions.png"),
+        lats, lons, sample_time,
+    )
+    plot_data(
+        data_np, target_m, days_before,
+        join(output_dir, f"{model_name}_ex_{ex_num:03d}.png"),
+        lats, lons, input_vars, sample_time,
+    )
+    psd_output = compute_psd(output_np - mean_ssh, lats, lons)
+    psd_target = compute_psd(target_np - mean_ssh, lats, lons)
+    plot_psd(
+        [psd_output, psd_target],
+        add_reference=True,
+        labels=["ML spectrum", "Target spectrum"],
+        path=output_dir,
+        filename=f"{model_name}_ex_{ex_num:03d}_psd.png",
+    )
+
+
+# ---------------------------------------------------------------------------
 
 def main(config):
-    logger = config.get_logger('test')
+    logger = config.get_logger("test")
 
-    batch_size = config['data_loader']['args']['batch_size']
-    data_dir = config['data_loader']['args']['data_dir']
-    dataset_type = config['data_loader']['args']['dataset_type']
-    previous_days = config['data_loader']['args']['previous_days']
+    # Resolve the weights directory (CLI > config.yml > last_run.txt breadcrumb).
+    weights_dir = config.weights_dir
+    if weights_dir is None:
+        raise ValueError(
+            "Could not determine weights_dir. Provide one of:\n"
+            "  • python test.py -c config.yml -wd /path/to/run\n"
+            "  • Set tester.weights_dir in config.yml\n"
+            "  • Run train.py first (it writes last_run.txt automatically)"
+        )
+    logger.info(f"Using weights from: {weights_dir}")
 
-    # setup data_loader instances
-    data_loader = getattr(module_data, config['data_loader']['type'])(
-        config['data_loader']['args']['data_dir'],
-        batch_size=config['data_loader']['args']['batch_size'],
+    # ------------------------------------------------------------------
+    # Data loader
+    # ------------------------------------------------------------------
+    dl_args     = config["data_loader"]["args"]
+    data_loader = getattr(module_data, config["data_loader"]["type"])(
+        dl_args["data_dir"],
+        batch_size=dl_args["batch_size"],
         shuffle=False,
         validation_split=0.0,
         training=False,
-        # training=True,
-        num_workers=config['data_loader']['args']['num_workers'],
-        previous_days=config['data_loader']['args']['previous_days'],
-        dataset_type=dataset_type,
-        input_vars=config['data_loader']['args']['input_vars']
+        num_workers=dl_args["num_workers"],
+        previous_days=dl_args["previous_days"],
+        dataset_type=dl_args["dataset_type"],
+        input_vars=dl_args["input_vars"],
     )
 
-    # Read the scalers from the data_dir
-    with open(join(data_dir, 'scalers.pkl'), 'rb') as f:
+    # ------------------------------------------------------------------
+    # Load scalers
+    # ------------------------------------------------------------------
+    with open(join(dl_args["data_dir"], "scalers.pkl"), "rb") as f:
         scalers = pickle.load(f)
 
     mean_ssh = scalers["ssh"]["mean"]
-    std_ssh = scalers["ssh"]["std"]
+    std_ssh  = scalers["ssh"]["std"]
 
-    # Read config.json from the weights_file directory
-    weights_dir = config['tester']['weights_dir']
-    with open(join(weights_dir, 'config.json'), 'r') as f:
-        training_config = json.load(f)
+    # ------------------------------------------------------------------
+    # Read the training config that was saved alongside the weights.
+    # This ensures the model architecture matches what was trained.
+    # ------------------------------------------------------------------
+    training_cfg_path = join(weights_dir, "config.yml")
+    with open(training_cfg_path, "r") as f:
+        training_config = yaml.safe_load(f)
 
-    # Model name
-    model_name = training_config['name']
+    model_name = training_config["name"]
 
-    # Setup output directory
-    output_dir = join(config['tester']['output_dir'], model_name, weights_dir.split('/')[-2])
+    # ------------------------------------------------------------------
+    # Output directory  →  <tester.output_dir>/<model_name>/<run_id>
+    # ------------------------------------------------------------------
+    run_id     = str(weights_dir).split(os.sep)[-1]   # last path component
+    output_dir = join(config["tester"]["output_dir"], model_name, run_id)
     os.makedirs(output_dir, exist_ok=True)
 
-    weights_file = join(weights_dir, 'model_best.pth')
+    # Persist a copy of the test config alongside results for reproducibility.
+    with open(join(output_dir, "test_config.yml"), "w") as f:
+        yaml.dump(config.config, f, default_flow_style=False, sort_keys=False)
 
-    # build model architecture
-    model = config.init_obj('arch', module_arch)
+    # ------------------------------------------------------------------
+    # Build model and load weights
+    # ------------------------------------------------------------------
+    weights_file = join(weights_dir, "model_best.pth")
+    model = config.init_obj("arch", module_arch)
     logger.info(model)
 
-    # get function handles of loss and metrics
-    loss_fn = module_loss.build_loss(config['loss'])
-    metric_fns = [getattr(module_metric, met) for met in config['metrics']]
+    loss_fn    = module_loss.build_loss(config["loss"])
+    metric_fns = [getattr(module_metric, met) for met in config["metrics"]]
 
-    # Load weights
-    logger.info('Loading checkpoint: {} ...'.format(weights_file))
+    logger.info(f"Loading checkpoint: {weights_file} …")
     checkpoint = torch.load(weights_file, weights_only=False)
-    state_dict = checkpoint['state_dict']
+    state_dict = checkpoint["state_dict"]
 
-    #device, device_ids = prepare_device(config['n_gpu'])
-    device, device_ids = prepare_device(1)
+    device, _ = prepare_device(1)
     model = model.to(device)
-
-    #if len(device_ids) > 1:
     model = torch.nn.DataParallel(model)
-
     model = torch.compile(model)
     model.load_state_dict(state_dict)
     model.eval()
 
-    # OPTIMIZATION
-    torch.set_float32_matmul_precision('medium')
+    torch.set_float32_matmul_precision("medium")
 
-    total_loss = 0.0
+    # ------------------------------------------------------------------
+    # Inference loop
+    # ------------------------------------------------------------------
+    batch_size    = dl_args["batch_size"]
+    dataset_type  = dl_args["dataset_type"]
+    total_loss    = 0.0
     total_metrics = torch.zeros(len(metric_fns))
 
-    # Read the lats and lons from 
-    lats = data_loader.dataset.lats
-    lons = data_loader.dataset.lons
+    lats, lons, time = data_loader.dataset.get_coords()
+    input_vars = data_loader.dataset.input_vars
+    days_before = data_loader.dataset.previous_days
+
+    validation_loss  = []
+    validation_times = []  # sample time for each validation_loss entry
+    psd_output_list  = []
+    psd_target_list  = []
     save_predictions = False
-    validation_loss = []
-    psd_output_list = []
-    psd_target_list = []
+    av_cpu = len(os.sched_getaffinity(0)) 
+    print(f"Number of workers for plotting: {av_cpu}")
     with torch.no_grad():
         for i, (data, target) in enumerate(tqdm(data_loader)):
-            if i == 0:
-                # Crop the lats and lons to the shape of the data
-                lats = lats[:data.shape[2]]
-                lons = lons[:data.shape[3]]
-
-            # print(f"Batch {i} of {len(data_loader)}")
             data, target = data.to(device), target.to(device)
-            mask = data[:, -1, :, :]
+            mask   = data[:, -1, :, :]
             target = target.squeeze()
             output = model(data)
+            sample_time = time[i*batch_size : i*batch_size + batch_size]
 
-            # computing loss, metrics on test set
-            # Scale the output and target
+            # Inverse-scale to physical units
             output = output * torch.tensor(std_ssh).to(device) + torch.tensor(mean_ssh).to(device)
             target = target * torch.tensor(std_ssh).to(device) + torch.tensor(mean_ssh).to(device)
 
-            # Plotting the output
-            # For each batch plot the first 10 samples
-            for j in range(min(output.shape[0], 2)):
-                ex_num = i*batch_size + j + 1
-                file_name = join(output_dir, f"{model_name}_ex_{ex_num:03d}.png")
-                plot_predictions(data[j].detach().cpu().numpy(), 
-                                 target[j].detach().cpu().numpy(), 
-                                 output[j].detach().cpu().numpy(), file_name, lats, lons, dataset_type)
-                # Compute the PSD of the output and target
-                psd_output = compute_psd(output[j].detach().cpu().numpy() - mean_ssh, lats, lons)
-                psd_target = compute_psd(target[j].detach().cpu().numpy() - mean_ssh, lats, lons)
-                plot_psd([psd_output, psd_target], add_reference=True, labels=["ML spectrum", "Target spectrum"], path=output_dir, filename=f"{model_name}_ex_{ex_num:03d}_psd.png")
-                #print(f"PSD of output: {output_dir}")
+            # Qualitative plots in parallel
+            plot_tasks = []
+            for j in range(output.shape[0]):
+                ex_num = i * batch_size + j + 1
+                target_np = target[j].detach().cpu().numpy()
+                output_np = output[j].detach().cpu().numpy()
+                mask_np = mask[j].detach().cpu().numpy()
+                data_np = data[j].detach().cpu().numpy()
+                plot_tasks.append((
+                    target_np, output_np, mask_np, data_np, ex_num, sample_time[j],
+                    output_dir, model_name, lats, lons, days_before, input_vars, mean_ssh,
+                ))
+            with ProcessPoolExecutor(max_workers=n_plot_workers) as executor:
+                list(executor.map(_plot_one_sample, plot_tasks))
 
+            # PSD accumulation over all samples
             for ii in range(output.shape[0]):
                 psd_output = compute_psd(output[ii].detach().cpu().numpy() - mean_ssh, lats, lons)
                 psd_target = compute_psd(target[ii].detach().cpu().numpy() - mean_ssh, lats, lons)
                 if ii == 0:
                     k_bins = psd_output[1]
-                
                 psd_output_list.append(psd_output[0])
                 psd_target_list.append(psd_target[0])
-            
-            # Mask-aware loss (same as training)
-            loss = F.mse_loss(output * mask, target * mask, reduction='sum')
+
+            # Mask-aware MSE loss
+            loss  = F.mse_loss(output * mask, target * mask, reduction="sum")
             valid = mask.sum()
-            loss = loss / (valid + 1e-8)
+            loss  = loss / (valid + 1e-8)
 
-            batch_size = data.shape[0]
-            total_loss += loss.item() * batch_size
+            total_loss += loss.item() * data.shape[0]
 
-            # Metrics
             for j, metric in enumerate(metric_fns):
-                total_metrics[j] += metric(output, target) * batch_size
+                total_metrics[j] += metric(output, target) * data.shape[0]
 
-            # Mask-aware RMSE per sample
-            diff2 = ((output - target)**2) * mask
-            rmse = torch.sqrt(diff2.sum(dim=(1,2)) / (mask.sum(dim=(1,2)) + 1e-8))
-
-            for r in rmse.cpu().numpy():
-                validation_loss.append(float(r))
+            # Per-sample mask-aware RMSE
+            diff2 = ((output - target) ** 2) * mask
+            rmse  = torch.sqrt(diff2.sum(dim=(1, 2)) / (mask.sum(dim=(1, 2)) + 1e-8))
+            validation_loss.extend(float(r) for r in rmse.cpu().numpy())
+            # One time per sample (align with output.shape[0] in case last batch is smaller than slice)
+            n_in_batch = output.shape[0]
+            validation_times.extend(
+                pd.Timestamp(np.datetime64(sample_time[j])).strftime("%Y-%m-%d")
+                for j in range(n_in_batch)
+            )
 
             if save_predictions:
-                # Save the output to a netcdf file
                 for j in range(output.shape[0]):
-                    output_file = join(output_dir, f"pred_batch_{i}_sample_{j}.nc")
-                    xr.Dataset({
-                        'output': (['latitude', 'longitude'], output[j].detach().cpu().numpy()),
-                        'target': (['latitude', 'longitude'], target[j].detach().cpu().numpy())
-                    }, coords={
-                        'latitude': lats,
-                        'longitude': lons
-                    }).to_netcdf(output_file)
+                    xr.Dataset(
+                        {
+                            "output": (["latitude", "longitude"], output[j].detach().cpu().numpy()),
+                            "target": (["latitude", "longitude"], target[j].detach().cpu().numpy()),
+                        },
+                        coords={"latitude": lats, "longitude": lons},
+                    ).to_netcdf(join(output_dir, f"pred_batch_{i}_sample_{j}.nc"))
 
-    # Save the loss
-    loss_file = join(output_dir, "loss.csv")
-    with open(loss_file, "w") as f:
-        for loss in validation_loss:
-            f.write(f"{loss}\n")
+    # ------------------------------------------------------------------
+    # Aggregate results
+    # ------------------------------------------------------------------
+    # Per-sample RMSE CSV (date, rmse)
+    with open(join(output_dir, "loss.csv"), "w") as f:
+        f.write("date,rmse\n")
+        for t, v in zip(validation_times, validation_loss):
+            f.write(f"{t},{v}\n")
 
+    # Mean PSD plot
     psd_output_array = np.array(psd_output_list).mean(axis=0)
     psd_target_array = np.array(psd_target_list).mean(axis=0)
-    plot_psd([(psd_output_array, k_bins), (psd_target_array, k_bins)], 
-             add_reference=True, labels=["ML spectrum", "DUACS spectrum"], 
-             path=output_dir,
-             title="Mean PSD of the output and target",
-             filename=f"mean_psd.png")
+    plot_psd(
+        [(psd_output_array, k_bins), (psd_target_array, k_bins)],
+        add_reference=True,
+        labels=["ML spectrum", "DUACS spectrum"],
+        path=output_dir,
+        title="Mean PSD of the output and target",
+        filename="mean_psd.png",
+    )
 
-    # save pkl with the psd_output and psd_target
-    with open(join(output_dir, "psd_output.pkl"), "wb") as f:
-        pickle.dump(psd_output_list, f)
-    with open(join(output_dir, "psd_target.pkl"), "wb") as f:
-        pickle.dump(psd_target_list, f)
-    with open(join(output_dir, "k_bins.pkl"), "wb") as f:
-        pickle.dump(k_bins, f)
+    # PSD pickles
+    for name, obj in [("psd_output", psd_output_list),
+                      ("psd_target", psd_target_list),
+                      ("k_bins",     k_bins)]:
+        with open(join(output_dir, f"{name}.pkl"), "wb") as f:
+            pickle.dump(obj, f)
 
-    # Make a scatter plot of the validation loss
+    # RMSE scatter plot (date on x-axis, mean and mean±std as horizontal lines)
     mean_rmse = np.mean(validation_loss)
-    plt.figure()
-    title = f"Mean RMSE: {mean_rmse:.4f} m"
-    plt.scatter(range(len(validation_loss)), validation_loss)
-    plt.xlabel("Examples from validation set")
-    plt.ylabel("RMSE (m)")
-    plt.title(title)
-    plt.savefig(join(output_dir, "validation_loss.png"), dpi=300, bbox_inches='tight')
+    std_rmse = np.std(validation_loss)
+    dates = pd.to_datetime(validation_times)
+    fig, ax = plt.subplots()
+    ax.scatter(dates, validation_loss, alpha=0.7)
+    ax.axhline(mean_rmse, color="red", linestyle="--", linewidth=1.5, label=f"Mean RMSE = {mean_rmse:.4f} m")
+    ax.axhline(mean_rmse + std_rmse, color="gray", linestyle="--", linewidth=1, label=f"Mean + 1 std = {mean_rmse + std_rmse:.4f} m")
+    ax.axhline(mean_rmse - std_rmse, color="gray", linestyle="--", linewidth=1, label=f"Mean - 1 std = {mean_rmse - std_rmse:.4f} m")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("RMSE (m)")
+    ax.set_title(f"Per-sample RMSE (mean = {mean_rmse:.4f} m, std = {std_rmse:.4f} m)")
+    ax.legend(loc="upper right", fontsize=8)
+    fig.autofmt_xdate()
+    plt.tight_layout()
+    plt.savefig(join(output_dir, "validation_loss.png"), dpi=300, bbox_inches="tight")
     plt.close()
-    # Save the RMSE as a csv file
-    np.savetxt(join(output_dir, "validation_loss.csv"), validation_loss, delimiter=",")
+
+    # Summary text: statistics and top 5 best / worst samples
+    sorted_by_rmse = sorted(zip(validation_times, validation_loss), key=lambda x: x[1])
+    n = len(validation_loss)
+    top5_best = sorted_by_rmse[: min(5, n)]
+    top5_worst = sorted_by_rmse[-min(5, n) :][::-1]
+    with open(join(output_dir, "validation_loss_summary.txt"), "w") as f:
+        f.write("Validation RMSE summary\n")
+        f.write("=" * 50 + "\n")
+        f.write(f"  Samples:     {n}\n")
+        f.write(f"  Mean RMSE:   {mean_rmse:.6f} m\n")
+        f.write(f"  Std RMSE:    {std_rmse:.6f} m\n")
+        f.write(f"  Min RMSE:    {np.min(validation_loss):.6f} m\n")
+        f.write(f"  Max RMSE:    {np.max(validation_loss):.6f} m\n")
+        f.write("\nTop 5 best (lowest RMSE):\n")
+        f.write("-" * 40 + "\n")
+        for date, rmse in top5_best:
+            f.write(f"  {date}   {rmse:.6f} m\n")
+        f.write("\nTop 5 worst (highest RMSE):\n")
+        f.write("-" * 40 + "\n")
+        for date, rmse in top5_worst:
+            f.write(f"  {date}   {rmse:.6f} m\n")
 
     n_samples = len(data_loader.sampler)
-    log = {'loss': total_loss / n_samples}
+    log = {"loss": total_loss / n_samples}
     log.update({
-        met.__name__: total_metrics[i].item() / n_samples for i, met in enumerate(metric_fns)
+        met.__name__: total_metrics[i].item() / n_samples
+        for i, met in enumerate(metric_fns)
     })
     logger.info(log)
+    print(f"\nResults saved to: {output_dir}")
 
 
-if __name__ == '__main__':
-    args = argparse.ArgumentParser(description='PyTorch Template')
-    args.add_argument('-c', '--config', default='config.json', type=str,
-                      help='config file path (default: None)')
-    args.add_argument('-r', '--resume', default=None, type=str,
-                      help='path to latest checkpoint (default: None)')
-    args.add_argument('-d', '--device', default=None, type=str,
-                      help='indices of GPUs to enable (default: all)')
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import sys
 
-    save_predictions = False
-    args.add_argument('-s', '--save_predictions', default=False, type=bool,
-                      help='Save the predictions to a netcdf file (default: False)')
+    args = argparse.ArgumentParser(description="UNet SSH predictor - testing")
+    args.add_argument("-c", "--config", default="config.yml", type=str,
+                      help="Path to config.yml (default: config.yml)")
+    args.add_argument("-r", "--resume", default=None, type=str,
+                      help="Path to a checkpoint (default: None)")
+    args.add_argument("-d", "--device", default=None, type=str,
+                      help="Comma-separated CUDA device indices (default: all visible)")
+    args.add_argument("-i", "--uid", default=None, type=str,
+                      help=(
+                          "Unique run identifier prefix used during training. "
+                          "Reconstructs the weights directory from config + uid, "
+                          "identical to the path train.py created. "
+                          "If omitted, falls back to tester.weights_dir in config.yml."
+                      ))
+    args.add_argument(
+        "-wd", "--weights_dir", default=None, type=str,
+        help=(
+            "Path to the experiment directory that contains model_best.pth and "
+            "config.yml (the copy saved by train.py).  "
+            "When omitted, falls back to tester.weights_dir in config.yml."
+        ),
+    )
 
     config = ConfigParser.from_args(args)
     main(config)
+    sys.exit(0)
