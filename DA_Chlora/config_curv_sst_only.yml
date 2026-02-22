@@ -47,7 +47,7 @@ loss:
   - name: masked_mse_loss
     weight: 1.0
   - name: sobel_gradient_magnitude_loss
-    weight: 0.5
+    weight: 0.1
     args:
       normalize: false
       regularization: l2

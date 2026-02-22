@@ -2,6 +2,7 @@
 import argparse
 import torch
 import pickle
+from collections import defaultdict
 from tqdm import tqdm
 import data_loader.data_loaders as module_data
 import model.loss as module_loss
@@ -244,14 +245,18 @@ def main(config):
     metric_fns = [getattr(module_metric, met) for met in config["metrics"]]
 
     logger.info(f"Loading checkpoint: {weights_file} …")
-    checkpoint = torch.load(weights_file, weights_only=False)
-    state_dict = checkpoint["state_dict"]
 
     device, _ = prepare_device(1)
+
+    checkpoint = torch.load(weights_file, weights_only=False, map_location=device)
+    state_dict = checkpoint["state_dict"]
+
+    
     model = model.to(device)
     model = torch.nn.DataParallel(model)
     model = torch.compile(model)
     model.load_state_dict(state_dict)
+
     model.eval()
 
     torch.set_float32_matmul_precision("medium")
@@ -273,8 +278,8 @@ def main(config):
     psd_output_list  = []
     psd_target_list  = []
     save_predictions = False
-    av_cpu = len(os.sched_getaffinity(0)) 
-    print(f"Number of workers for plotting: {av_cpu}")
+    n_plot_workers = len(os.sched_getaffinity(0)) - 2
+    print(f"Number of workers for plotting: {n_plot_workers}")
     with torch.no_grad():
         for i, (data, target) in enumerate(tqdm(data_loader)):
             data, target = data.to(device), target.to(device)
@@ -388,27 +393,97 @@ def main(config):
     plt.savefig(join(output_dir, "validation_loss.png"), dpi=300, bbox_inches="tight")
     plt.close()
 
-    # Summary text: statistics and top 5 best / worst samples
-    sorted_by_rmse = sorted(zip(validation_times, validation_loss), key=lambda x: x[1])
+    # Monthly RMSE: group by month (1-12) across all years
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    monthly_rmse = defaultdict(list)
+    for t, v in zip(validation_times, validation_loss):
+        month_num = t[5:7]  # "MM" from "YYYY-MM-DD"
+        monthly_rmse[month_num].append(v)
+    monthly_means = {m: np.mean(vals) for m, vals in monthly_rmse.items()}
+    monthly_stds = {m: np.std(vals) for m, vals in monthly_rmse.items()}
+    # Sort by month number (01..12), only months that have data
+    months_sorted = sorted(monthly_means.keys(), key=lambda m: int(m))
+    best3_months = sorted(monthly_means.keys(), key=lambda m: monthly_means[m])[:3]
+    worst3_months = sorted(monthly_means.keys(), key=lambda m: monthly_means[m])[-3:][::-1]
+
+    # Bar plot: one bar per month with std as error bars
+    fig, ax = plt.subplots(figsize=(max(8, len(months_sorted) * 0.6), 5))
+    x_pos = np.arange(len(months_sorted))
+    means = [monthly_means[m] for m in months_sorted]
+    stds = [monthly_stds[m] for m in months_sorted]
+    ax.bar(x_pos, means, yerr=stds, capsize=3, color="steelblue", edgecolor="navy", alpha=0.8)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([month_names[int(m) - 1] for m in months_sorted], rotation=45, ha="right")
+    ax.set_ylabel("RMSE (m)")
+    ax.set_xlabel("Month")
+    ax.set_title("Monthly mean RMSE (±1 std) across all years")
+    plt.tight_layout()
+    plt.savefig(join(output_dir, "validation_loss_monthly.png"), dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # Summary text: statistics and top 5 best / worst samples (index = 1-based, matches ex_XXX plot names)
+    sorted_by_rmse = sorted(
+        zip(range(1, len(validation_loss) + 1), validation_times, validation_loss),
+        key=lambda x: x[2],
+    )
     n = len(validation_loss)
     top5_best = sorted_by_rmse[: min(5, n)]
     top5_worst = sorted_by_rmse[-min(5, n) :][::-1]
+    summary_lines = [
+        "Validation RMSE summary",
+        "=" * 50,
+        f"  Samples:     {n}",
+        f"  Mean RMSE:   {mean_rmse:.6f} m",
+        f"  Std RMSE:    {std_rmse:.6f} m",
+        f"  Min RMSE:    {np.min(validation_loss):.6f} m",
+        f"  Max RMSE:    {np.max(validation_loss):.6f} m",
+        "",
+        "Monthly RMSE (mean ± std, aggregated across all years):",
+        "-" * 50,
+        "  month      mean (m)    std (m)   n",
+    ]
+    for m in months_sorted:
+        name = month_names[int(m) - 1]
+        summary_lines.append(
+            f"  {name:<4}   {monthly_means[m]:.6f}   {monthly_stds[m]:.6f}   {len(monthly_rmse[m])}"
+        )
+    summary_lines.extend([
+        "",
+        "Top 3 best months (lowest mean RMSE):",
+        "-" * 50,
+    ])
+    for m in best3_months:
+        name = month_names[int(m) - 1]
+        summary_lines.append(f"  {name}   mean = {monthly_means[m]:.6f} m   std = {monthly_stds[m]:.6f} m   n = {len(monthly_rmse[m])}")
+    summary_lines.extend([
+        "",
+        "Top 3 worst months (highest mean RMSE):",
+        "-" * 50,
+    ])
+    for m in worst3_months:
+        name = month_names[int(m) - 1]
+        summary_lines.append(f"  {name}   mean = {monthly_means[m]:.6f} m   std = {monthly_stds[m]:.6f} m   n = {len(monthly_rmse[m])}")
+    summary_lines.extend([
+        "",
+        "Top 5 best (lowest RMSE):",
+        "-" * 50,
+        "  index    date         rmse (m)",
+    ])
+    for idx, date, rmse in top5_best:
+        summary_lines.append(f"  {idx:<7}  {date}   {rmse:.6f}")
+    summary_lines.extend([
+        "",
+        "Top 5 worst (highest RMSE):",
+        "-" * 50,
+        "  index    date         rmse (m)",
+    ])
+    for idx, date, rmse in top5_worst:
+        summary_lines.append(f"  {idx:<7}  {date}   {rmse:.6f}")
+    summary_text = "\n".join(summary_lines)
     with open(join(output_dir, "validation_loss_summary.txt"), "w") as f:
-        f.write("Validation RMSE summary\n")
-        f.write("=" * 50 + "\n")
-        f.write(f"  Samples:     {n}\n")
-        f.write(f"  Mean RMSE:   {mean_rmse:.6f} m\n")
-        f.write(f"  Std RMSE:    {std_rmse:.6f} m\n")
-        f.write(f"  Min RMSE:    {np.min(validation_loss):.6f} m\n")
-        f.write(f"  Max RMSE:    {np.max(validation_loss):.6f} m\n")
-        f.write("\nTop 5 best (lowest RMSE):\n")
-        f.write("-" * 40 + "\n")
-        for date, rmse in top5_best:
-            f.write(f"  {date}   {rmse:.6f} m\n")
-        f.write("\nTop 5 worst (highest RMSE):\n")
-        f.write("-" * 40 + "\n")
-        for date, rmse in top5_worst:
-            f.write(f"  {date}   {rmse:.6f} m\n")
+        f.write(summary_text)
+        f.write("\n")
+    print("\n" + summary_text)
 
     n_samples = len(data_loader.sampler)
     log = {"loss": total_loss / n_samples}
