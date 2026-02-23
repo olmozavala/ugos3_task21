@@ -142,3 +142,4 @@ debug_*
 *.slurm
 # Images
 *.png
+config_*.yml

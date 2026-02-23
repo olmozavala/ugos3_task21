@@ -163,3 +163,91 @@ class UNet(BaseModel):
             # print(x.shape)
 
         return self.out_layer(x).squeeze(1)
+
+
+class UNetNoSkip(BaseModel):
+    """UNet without skip connections: encoder path is not concatenated into the decoder."""
+
+    def __init__(self, previous_days, in_channels, start_filters=64, num_levels=4,
+                 kernel_size=3, batch_norm=False, cnn_per_level=2,
+                 dropout_rate=0, hidden_activation="relu", output_activation="linear", dataset_type="regular"):
+        super(UNetNoSkip, self).__init__()
+        print("UNetNoSkip model (no skip connections)")
+        cur_filters = -1
+
+        if dataset_type != "regular":
+            in_channels = in_channels * previous_days + 3
+        else:
+            in_channels = in_channels * previous_days + 1
+
+        out_channels = 1
+
+        encoder_blocks = OrderedDict()
+        decoder_blocks = OrderedDict()
+        self.maxpools = nn.ModuleList()
+        self.levels = num_levels
+        self.maxpool = nn.MaxPool2d(2, 2)
+        cur_w = 648
+        cur_h = 712
+        print("---------- Encoder ----------")
+        for c_level in range(1, num_levels):
+            input_filters = in_channels if c_level == 1 else output_filters
+            output_filters = start_filters if c_level == 1 else output_filters * 2
+            print(f'Level {c_level} in: {input_filters}x{cur_w}x{cur_h}')
+            c_encoder = EncoderDecoderBlock(c_level, cnn_per_level, hidden_activation, in_filters=input_filters,
+                                            out_filters=output_filters, kernel_size=kernel_size, batch_norm=batch_norm)
+            encoder_blocks[f'enc_lev_{c_level}'] = c_encoder
+            cur_w = int((cur_w) / 2)
+            cur_h = int((cur_h) / 2)
+            print(f'-- Level {c_level} out: {output_filters}x{cur_w}x{cur_h}')
+            cur_filters = output_filters
+
+        self.encoder_blocks = nn.Sequential(encoder_blocks)
+        self.maxpools = nn.ModuleList([nn.MaxPool2d(2, 2) for _ in range(num_levels - 1)])
+
+        print("---------- Bottom ----------")
+        input_filters = cur_filters
+        print(f'-- Level Bottom in: {input_filters}x{cur_w}x{cur_h}')
+        output_filters = int(cur_filters * 2)
+        self.bottom = EncoderDecoderBlock('bottom', cnn_per_level, hidden_activation, in_filters=input_filters,
+                                          out_filters=output_filters, kernel_size=kernel_size, batch_norm=batch_norm,
+                                          add_transpose=True)
+        cur_w = int((cur_w) * 2)
+        cur_h = int((cur_h) * 2)
+        print(f'-- Level Bottom out: {output_filters}x{cur_w}x{cur_h}')
+        cur_filters = output_filters
+
+        print("---------- Decoder (no skip) ----------")
+        for c_level in range(num_levels - 1, 0, -1):
+            input_filters = cur_filters  # No skip: decoder input = current filters only
+            print(f'Level {c_level} in: {input_filters}x{cur_w}x{cur_h}')
+
+            add_transpose = False if c_level == 1 else True
+            output_filters = int(cur_filters / 2) if add_transpose else input_filters
+
+            decoder_blocks[f'dec_lev_{c_level}'] = EncoderDecoderBlock(c_level, cnn_per_level, hidden_activation,
+                                                                        input_filters, output_filters,
+                                                                        kernel_size, add_transpose=add_transpose,
+                                                                        batch_norm=batch_norm)
+            cur_w = int((cur_w) * 2) if add_transpose else cur_w
+            cur_h = int((cur_h) * 2) if add_transpose else cur_h
+            print(f'-- Level {c_level} out: {output_filters}x{cur_w}x{cur_h}')
+            cur_filters = output_filters
+
+        self.decoder_blocks = nn.Sequential(decoder_blocks)
+        print(f'* Last layer in: {output_filters}x{cur_w}x{cur_h}')
+        print(f'* Last layer out: {out_channels}x{cur_w}x{cur_h}')
+        self.out_layer = EncoderDecoderBlock(c_level, 1, output_activation, output_filters, out_channels, kernel_size,
+                                              add_transpose=add_transpose, batch_norm=batch_norm)
+
+    def forward(self, x):
+        for level, enc_block in enumerate(self.encoder_blocks):
+            x = enc_block(x)
+            x = self.maxpools[level](x)
+
+        x = self.bottom(x)
+
+        for dec_block in self.decoder_blocks:
+            x = dec_block(x)
+
+        return self.out_layer(x).squeeze(1)
