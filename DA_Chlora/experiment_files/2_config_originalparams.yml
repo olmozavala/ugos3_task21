@@ -1,0 +1,83 @@
+name: baseline_model_originalparams_gelu_fused_ssh
+n_gpu: 2
+mode: training
+
+dataset_type_opts:
+  - regular
+  - extended
+  - gradient
+
+arch:
+  type: UNet
+  args:
+    previous_days: 7
+    in_channels: null   # set to null to auto-infer from data_loader.args.input_vars
+    start_filters: 32
+    num_levels: 4
+    kernel_size: 3
+    cnn_per_level: 2
+    batch_norm: true
+    dropout_rate: 0
+    hidden_activation: gelu
+    output_activation: linear
+    dataset_type: gradient
+
+data_loader:
+  type: DefaultDataLoader
+  args:
+    data_dir: /unity/g2/jvelasco/dataset/ugos/datasets_v2/
+    batch_size: 48 # Original batch size was 60 but we don't have enough memory to train with it using 2 GPUs. Let's see if it works with 48, else we scale to 60 as fallback.
+    shuffle: true
+    validation_split: 0.1
+    num_workers: 10
+    previous_days: 7
+    horizon_days: 2
+    dataset_type: gaussian_noise
+    input_vars:
+      - sst
+      - chlora
+      - fused_ssh
+    pkl_files:
+      - training.pkl
+      - training_p2.pkl
+      #- training_p3.pkl # Using only 2 dataset to have about the same number of samples as in the initial successful model
+
+optimizer:
+  type: AdamW
+  args:
+    lr: 0.001
+    weight_decay: 0.0001
+
+loss:
+  - name: masked_mse_loss
+    weight: 1.0
+  - name: sobel_gradient_magnitude_loss
+    weight: 1.0
+    args:
+      normalize: false
+      regularization: magnitude
+
+metrics: []
+
+lr_scheduler:
+  type: StepLR
+  args:
+    step_size: 50
+    gamma: 0.1
+
+trainer:
+  epochs: 1000
+  save_dir: /unity/g2/jvelasco/ai_outs/baseline_v2/training
+  save_period: 1
+  verbosity: 2
+  monitor: min val_loss
+  early_stop: 10
+  tensorboard: true
+
+tester:
+  # weights_dir: can be
+  #   - an absolute path to a specific run directory
+  #   - a run_id string only (resolved under trainer.save_dir/models/<name>/<weights_dir>)
+  #   - null → must be supplied via --weights_dir CLI argument or last_run.txt
+  weights_dir: null
+  output_dir: /unity/g2/jvelasco/ai_outs/baseline_v2/testing

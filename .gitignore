@@ -142,4 +142,8 @@ debug_*
 *.slurm
 # Images
 *.png
+
+# Setup files
 config_*.yml
+logs/
+training_config_files/

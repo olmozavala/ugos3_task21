@@ -1,8 +1,8 @@
 # For testing the dataset
 import sys
-#sys.path.append("/unity/f1/ozavala/CODE/ugos3_task21/DA_Chlora") # Only for testing purposes
-sys.path.append("/unity/g2/jvelasco/gitraw/ugos3_task21/DA_Chlora") # Only for testing purposes
+sys.path.append("/unity/g2/jvelasco/github/ml_experiments/multi_vit") # For testing purposes
 import os
+import bisect
 import pickle
 import numpy as np
 import xarray as xr
@@ -13,11 +13,12 @@ import matplotlib.pyplot as plt
 import re
 import glob
 import cv2
-from scipy.ndimage import gaussian_filter
 import pandas as pd
+
 # Canonical variable order for stacking X in the cached pkl.
 # IMPORTANT: indices in config refer to this ordering.
 DEFAULT_INPUT_VARS = ["sst", "chlora", "ssh_track", "swot", "fused_ssh"]
+
 
 def _resolve_selected_vars(*, all_input_vars, input_vars=None, selected_vars=None):
     """
@@ -44,7 +45,8 @@ def _resolve_selected_vars(*, all_input_vars, input_vars=None, selected_vars=Non
             for idx in selected_vars:
                 if idx < 0 or idx >= len(all_input_vars):
                     raise ValueError(
-                        f"selected_vars index {idx} out of range for all_input_vars (len={len(all_input_vars)}): {all_input_vars}"
+                        f"selected_vars index {idx} out of range for all_input_vars "
+                        f"(len={len(all_input_vars)}): {all_input_vars}"
                     )
                 requested_names.append(all_input_vars[idx])
         elif all(isinstance(v, str) for v in selected_vars):
@@ -63,108 +65,160 @@ def _resolve_selected_vars(*, all_input_vars, input_vars=None, selected_vars=Non
     selected_indices = [all_input_vars.index(v) for v in selected_names]
     return selected_names, selected_indices
 
-# Function to apply StandardScaler to an array and persist the scaler
+
 def scale_data_dataset(data, scalers, name, training=True):
-    # Flatten the data to 2D, where each row is a sample
+    """Apply StandardScaler to an array and persist the scaler."""
     reshaped_data = data.data.flatten()
     if training:
-        min = np.nanmin(reshaped_data).compute()
-        max = np.nanmax(reshaped_data).compute()
+        min  = np.nanmin(reshaped_data).compute()
+        max  = np.nanmax(reshaped_data).compute()
         mean = np.nanmean(reshaped_data).compute()
-        std = np.nanstd(reshaped_data).compute()
+        std  = np.nanstd(reshaped_data).compute()
     else:
         print(f"Loading {name} scalers...")
-        min = scalers[name]['min']
-        max = scalers[name]['max']
+        min  = scalers[name]['min']
+        max  = scalers[name]['max']
         mean = scalers[name]['mean']
-        std = scalers[name]['std']
+        std  = scalers[name]['std']
 
     print(f"For {name}: Min: {min}, Max: {max}, Mean: {mean}, Std: {std}")
 
     scaled_data = (reshaped_data - mean) / std
-    
-    # Save the scaler for later use
     scalers[name] = {'mean': mean, 'std': std, 'min': min, 'max': max}
-
-    # Reshape the scaled data back to its original shape
     scaled_data = scaled_data.reshape(data.shape)
-    # Any nan values in the original data should be nan in the scaled data
     scaled_data = np.where(np.isnan(data.data), np.nan, scaled_data)
     return scaled_data, scalers
 
 
 def clean_gulf_mask(mask, min_size=500):
-    # Ensure mask is uint8 binary (0 and 255)
     mask_uint8 = (mask > 0).astype(np.uint8) * 255
-    
-    # 1. Remove small yellow "islands" in the land
-    # Find all connected components of valid pixels
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask_uint8, connectivity=8)
-    
+
+    # Remove small islands in the land
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask_uint8, connectivity=8)
     cleaned_mask = np.zeros_like(mask_uint8)
-    for i in range(1, num_labels): # Skip background (label 0)
+    for i in range(1, num_labels):
         if stats[i, cv2.CC_STAT_AREA] >= min_size:
             cleaned_mask[labels == i] = 255
-            
-    # 2. Fill small purple "pockmarks" (holes) in the ocean
-    # Invert, remove small components, invert back
+
+    # Fill small holes in the ocean
     inverted = cv2.bitwise_not(cleaned_mask)
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(inverted, connectivity=8)
-    
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(inverted, connectivity=8)
     filled_mask = np.zeros_like(inverted)
     for i in range(1, num_labels):
         if stats[i, cv2.CC_STAT_AREA] >= min_size:
             filled_mask[labels == i] = 255
-            
+
     return cv2.bitwise_not(filled_mask) / 255.0
-# %% Simulate DUACs background field
-def groundto2background(data, lat, lon, resolution=0.125):
-    time = np.arange(data.shape[0])
-    downsampled_lats = np.arange(lat[0], lat[-1]+ resolution/2, resolution)
-    downsampled_lons = np.arange(lon[0], lon[-1]+ resolution/2, resolution)
-
-    ds = xr.Dataset({'ssh': (['time', 'latitude', 'longitude'], data)},
-                    coords={'time': ('time', time),
-                            'lat': ('lat', lat),
-                            'lon': ('lon', lon)})
-    ds = ds.interp(
-        lat=downsampled_lats, 
-        lon=downsampled_lons, 
-        method='linear').interp(
-            lat=lat, 
-            lon=lon, 
-            method='linear')
-    ds.ssh.data = np.where(np.isnan(ds.ssh.data), 0, ds.ssh.data)
-    return torch.tensor(ds.ssh.data, dtype=torch.float32)
 
 
-def gaussian_kernel(size: int, sigma: float):
-    """Creates a 2D Gaussian kernel."""
-    x = torch.arange(size) - size // 2
-    x = x.repeat(size, 1)
-    y = x.T
-    kernel = torch.exp(-(x**2 + y**2) / (2 * sigma**2))
-    return kernel / kernel.sum()
+# ---------------------------------------------------------------------------
+# Internal helper – load and preprocess one pkl segment into RAM
+# ---------------------------------------------------------------------------
+
+def _load_pkl_segment(
+    pkl_path,
+    selected_var_indices,
+    new_height,
+    new_width,
+    patch_size,
+    dataset_type,
+    previous_days,
+):
+    """
+    Load a single pkl file, select variables, replace NaNs, convert to tensors,
+    and crop to the patch-aligned spatial dimensions.
+
+    Parameters
+    ----------
+    new_height, new_width : int or None
+        Target crop dimensions.  Pass ``None`` on the *first* call and they will
+        be derived from the loaded data; the computed values are returned so every
+        subsequent segment is cropped identically.
+
+    Returns
+    -------
+    seg : dict  - keys: ``X`` (Tensor), ``Y`` (Tensor), ``time`` (ndarray),
+                        ``length`` (int, number of valid samples in this segment)
+    new_height, new_width : int
+    """
+    print(f"  Loading: {pkl_path}")
+    with open(pkl_path, "rb") as f:
+        X, Y, lats, lons, time = pickle.load(f)
+
+    # Variable selection
+    if X.shape[1] >= (max(selected_var_indices) + 1):
+        X = X[:, selected_var_indices]
+
+    # NaN → 0
+    X = np.where(np.isnan(X), 0, X)
+    Y = np.where(np.isnan(Y), 0, Y)
+
+    # Convert to tensors
+    X = torch.tensor(X, dtype=torch.float32)
+    Y = torch.tensor(Y, dtype=torch.float32)
+
+    # Derive crop dimensions from the first segment if not yet set
+    if new_height is None:
+        new_height = (X.shape[2] // patch_size) * patch_size
+        new_width  = (X.shape[3] // patch_size) * patch_size
+
+    X = X[..., :new_height, :new_width]
+    Y = Y[..., :new_height, :new_width]
+
+    # Number of valid samples in this segment
+    # (mirror the same end_cutoff logic as the original __init__)
+    end_cutoff = 2 if dataset_type in ("extended", "gradient") else 0
+    length = Y.shape[0] - previous_days - end_cutoff
+
+    if length <= 0:
+        raise ValueError(
+            f"Segment '{pkl_path}' has only {Y.shape[0]} time steps, which is "
+            f"insufficient for previous_days={previous_days} and "
+            f"dataset_type='{dataset_type}'."
+        )
+
+    seg = dict(X=X, Y=Y, time=time, length=length)
+    return seg, new_height, new_width
 
 
-def low_pass_filter(tensor, kernel_size=7, sigma=5):
-    """Applies a Gaussian low-pass filter to a 2D tensor."""
-    tensor = torch.tensor(tensor, dtype=torch.float32)
-    # Create Gaussian kernel
-    kernel = gaussian_kernel(kernel_size, sigma)
-    kernel = kernel.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
-    
-    # Apply convolution
-    tensor = tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
-    filtered_tensor = torch.nn.functional.conv2d(tensor, kernel, padding=kernel_size//2)
-    # Remove nan values in case there are any
-    filtered_tensor = torch.where(torch.isnan(filtered_tensor), torch.tensor(0, dtype=filtered_tensor.dtype, device=filtered_tensor.device), filtered_tensor)
-    return filtered_tensor.squeeze()
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
 
 class SimSatelliteDataset:
+    """
+    PyTorch-style dataset for satellite ocean data.
+
+    Supports loading **one or multiple** temporally-disjoint ``.pkl`` segment
+    files entirely into RAM.  Because there are large temporal gaps between
+    segments, samples are never constructed across segment boundaries — each
+    segment maintains its own ``previous_days`` window.
+
+    Parameters
+    ----------
+    data_dir : str
+        Root directory that contains the ``.pkl`` files and auxiliary files
+        (``mdt_normalized.nc``, etc.).
+    pkl_files : list[str] | None
+        Explicit list of ``.pkl`` *filenames* (not full paths) to load.
+        When provided the ``training`` flag is **ignored** for file selection.
+        Example::
+
+            pkl_files=["training_2018.pkl", "training_2019.pkl"]
+
+        When ``None`` the original single-file behaviour is preserved
+        (``training.pkl`` or ``validation.pkl`` selected by ``training``).
+    training : bool
+        Used only when ``pkl_files`` is ``None``.  Selects ``training.pkl``
+        (True) or ``validation.pkl`` (False).
+
+    All other parameters are identical to the original implementation.
+    """
+
     # Total 1758*2 = 3516 training examples
     # 10% validation split -> 351 examples
     # 90% training split -> 3165 examples
+
     def __init__(
         self,
         data_dir,
@@ -176,214 +230,239 @@ class SimSatelliteDataset:
         input_vars=None,
         selected_vars=None,
         all_input_vars=None,
+        patch_size=8,
+        pkl_files=None,         # ← NEW: list of filenames, or None for legacy mode
     ):
-        self.data_dir = data_dir
-        self.transform = transform
-        self.scalers = {}  # To store scalers for each variable
+        self.data_dir     = data_dir
+        self.transform    = transform
+        self.scalers      = {}
         self.previous_days = previous_days
-        self.plot_data = plot_data
+        self.plot_data    = plot_data
         self.dataset_type = dataset_type
-        self.dt = np.timedelta64(1, 'D')
-
+        self.dt           = np.timedelta64(1, 'D')
+        self.patch_size   = patch_size
         self.valid_start_idx = self.previous_days
 
-        # Input variables (canonical order used for stacking cached X)
-        self.all_input_vars = list(all_input_vars) if all_input_vars is not None else list(DEFAULT_INPUT_VARS)
-        # Var order {0:sst, 1:LOG(CHLORA), 2:ssh_track, 3:swot, 4:fused_ssh}
+        # ── variable resolution ──────────────────────────────────────────────
+        self.all_input_vars = (
+            list(all_input_vars) if all_input_vars is not None else list(DEFAULT_INPUT_VARS)
+        )
         self.input_vars, self.selected_var_indices = _resolve_selected_vars(
             all_input_vars=self.all_input_vars,
             input_vars=input_vars,
             selected_vars=selected_vars,
         )
 
-        output_vars = ["ssh"]
-        all_var_names = self.all_input_vars + output_vars
-        # We always normalize/stack in canonical order for caching; selection happens after load.
-        input_normalized_vars = [f"{var}_normalized" for var in self.all_input_vars]
-        output_var = [f"{var}_normalized" for var in output_vars][0]
-
-        scalers_file = "scalers.pkl"
-        # DO not delete this section it is used to select the input dataset as the computation takes some time 
-        if training:
-            pkl_file = "training.pkl"
-            # pkl_file = "training_full.pkl"
-            # pkl_file = "training_small.pkl"
+        # ── resolve segment file paths ───────────────────────────────────────
+        if not training:
+            pkl_files = None
+        if pkl_files is not None:
+            if not isinstance(pkl_files, (list, tuple)) or len(pkl_files) == 0:
+                raise ValueError("`pkl_files` must be a non-empty list of filename strings.")
+            segment_paths = [join(data_dir, f) for f in pkl_files]
         else:
-            pkl_file = "validation.pkl"
+            # Legacy single-file mode
+            pkl_file = "training.pkl" if training else "validation.pkl"
+            segment_paths = [join(data_dir, pkl_file)]
 
-        # Verify if 'training.pkl' file exists
-        training_pkl_path = join(data_dir, pkl_file)
+        # ── load all segments into RAM ───────────────────────────────────────
+        print(f"Loading {len(segment_paths)} segment(s) into RAM ...")
+        new_height, new_width = None, None
+        self._segments = []
 
-        print(f"Reading {pkl_file} file...")
-        with open(training_pkl_path, "rb") as f:
-            X, self.Y, self.lats, self.lons, self.time = pickle.load(f)
-        # Clip channels based on config selection, if the cached X has those channels.
-        if X.shape[1] >= (max(self.selected_var_indices) + 1):
-            X = X[:, self.selected_var_indices]
-        self.X = X
-        # assert self.X.shape[1] == 2, f"self.X.shape: {self.X.shape}"
-        # Load the MDT normalized data
+        for path in segment_paths:
+            seg, new_height, new_width = _load_pkl_segment(
+                pkl_path=path,
+                selected_var_indices=self.selected_var_indices,
+                new_height=new_height,
+                new_width=new_width,
+                patch_size=patch_size,
+                dataset_type=dataset_type,
+                previous_days=previous_days,
+            )
+            self._segments.append(seg)
+            print(
+                f"    → X={tuple(seg['X'].shape)}  Y={tuple(seg['Y'].shape)}  "
+                f"valid_samples={seg['length']}"
+            )
+
+        # ── cumulative offsets for O(log n) index routing ────────────────────
+        # _seg_offsets[i] is the first global index that belongs to segment i.
+        lengths = [s['length'] for s in self._segments]
+        self._seg_offsets = np.cumsum([0] + lengths[:-1]).tolist()
+        self.length = sum(lengths)
+
+        # ── shared spatial objects (derived once from the first segment) ─────
+        # Re-read the first file to get lats/lons and the raw Y for the mask.
+        # This is a small extra I/O hit but avoids keeping the raw arrays in
+        # memory alongside the already-processed tensors.
+        print(f"  Building shared spatial objects from {segment_paths[0]} ...")
+        with open(segment_paths[0], "rb") as f:
+            _X0, _Y0_raw, lats0, lons0, _ = pickle.load(f)
+        del _X0
+
+        self.lats = lats0[:new_height]
+        self.lons = lons0[:new_width]
+
+        # Gulf mask
+        gulf_mask = np.where(~np.isnan(_Y0_raw[0, :new_height, :new_width]), 1, 0)
+        gulf_mask[:100, :300] = 0
+        gulf_mask = cv2.erode(
+            gulf_mask.astype(np.uint8), np.ones((3, 3), dtype=np.uint8), iterations=3
+        )
+        gulf_mask = clean_gulf_mask(gulf_mask, min_size=1000).astype(np.uint8)
+        #gulf_mask = gulf_mask[:new_height, :new_width]
+        self.gulf_mask = torch.tensor(gulf_mask, dtype=torch.float32)
+        del _Y0_raw
+
+        # MDT
         self.mdt_normalized = xr.open_dataset(join(data_dir, "mdt_normalized.nc")).load()
-        # Make a mask of the gulf of Mexico
-        self.gulf_mask = np.zeros_like(self.Y[0,:,:])
-        # Create a mask for the Gulf of Mexico
-        self.gulf_mask = np.where(~np.isnan(self.Y[0,:,:]), 1, 0)
-        # Remove Pacific Ocean region
-        self.gulf_mask[:100, :300] = 0
+        self.mdt_normalized.ssh.data = np.where(
+            np.isnan(self.mdt_normalized.ssh.data), 0, self.mdt_normalized.ssh.data
+        )
+        self.mdt_normalized = self.mdt_normalized.isel(
+            lat=slice(None, new_height),
+            lon=slice(None, new_width),
+        ).load()
 
-        # Erode the mask
-        self.gulf_mask = cv2.erode(self.gulf_mask.astype(np.uint8), np.ones((3,3), dtype=np.uint8), iterations=3)
-        self.gulf_mask = clean_gulf_mask(self.gulf_mask, min_size=1000).astype(np.uint8)
-
-        # Replace all the nan values in X and Y with 0s
-        self.X = np.where(np.isnan(self.X), 0, self.X)
-        self.Y = np.where(np.isnan(self.Y), 0, self.Y)
-        # Convert nan values in mdt_normalized to 0
-        self.mdt_normalized.ssh.data = np.where(np.isnan(self.mdt_normalized.ssh.data), 0, self.mdt_normalized.ssh.data)
-        
-        #  Make tensors
-        self.X = torch.tensor(self.X, dtype=torch.float32)
-        self.Y = torch.tensor(self.Y, dtype=torch.float32)
-
-        # Crop the last two dimensions to the largest dimension divisible by 8
-        new_height = (self.X.shape[2] // 8) * 8
-        new_width = (self.X.shape[3] // 8) * 8
-        self.X = self.X[..., :new_height, :new_width]
-        self.Y = self.Y[..., :new_height, :new_width]
-        self.gulf_mask = self.gulf_mask[:new_height, :new_width]
-
-        self.lats = self.lats[:new_height]
-        self.lons = self.lons[:new_width]
-        self.mdt_normalized = self.mdt_normalized.isel(lat=slice(None, new_height), 
-                                                       lon=slice(None, new_width)).load()
-
+        # ── tot_inputs ───────────────────────────────────────────────────────
+        n_ch = self._segments[0]['X'].shape[1]
         if dataset_type == "regular":
-            # +1 because of the Gulf Mask
-            self.tot_inputs = self.X.shape[1] * self.previous_days + 1
-        elif dataset_type == "extended":
-            # +3 because of the Gulf Mask and the two previous states with some noise
-            self.tot_inputs = self.X.shape[1] * self.previous_days + 3
-        elif dataset_type == "gradient":
-            # + 5 because of the Gulf Mask, and the two previous states with some noise and the gradient (2 * 2)
-            self.tot_inputs = self.X.shape[1] * self.previous_days + 3
+            self.tot_inputs = n_ch * self.previous_days + 1
+        elif dataset_type in ("extended", "gradient", "gaussian_noise"):
+            self.tot_inputs = n_ch * self.previous_days + 3
 
-        # Make the mask a float32 tensor
-        self.gulf_mask = torch.tensor(self.gulf_mask, dtype=torch.float32)
-
-        # Get the length of the dataset
-        end_cutoff = 0
-        if self.dataset_type == "extended":
-            end_cutoff = 2
-        if self.dataset_type == "gradient":
-            end_cutoff = 2
-
-        # 3. Calculate effective length
-        # Total available - start offset - end cutoff
-        self.length = self.Y.shape[0] - self.valid_start_idx - end_cutoff
-
-        # # Verify the dimensions
-        print(f"X shape: {self.X.shape}")
-        print(f"Y shape: {self.Y.shape}")
+        print(
+            f"Dataset ready: {len(self._segments)} segment(s), "
+            f"{self.length} total samples, "
+            f"spatial={new_height}x{new_width}, "
+            f"tot_inputs={self.tot_inputs}"
+        )
         print("Preloading by the data loader is done!")
+
+    # ── index routing ────────────────────────────────────────────────────────
+
+    def _resolve_index(self, global_index):
+        """Map a global index to the owning segment dict and the real array index."""
+        # bisect_right gives the insertion point after the last offset ≤ global_index,
+        # so subtracting 1 gives the segment that owns this index.
+        seg_idx   = bisect.bisect_right(self._seg_offsets, global_index) - 1
+        local_idx = global_index - self._seg_offsets[seg_idx]
+        real_idx  = local_idx + self.valid_start_idx   # skip the leading previous_days rows
+        return self._segments[seg_idx], real_idx
+
+    # ── standard Dataset interface ───────────────────────────────────────────
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, index):
-        # Append the Gulf Mask to the X array
-        real_index = index + self.valid_start_idx
+        seg, real_index = self._resolve_index(index)
 
-        X_with_mask = np.zeros((self.tot_inputs, self.X.shape[2], self.X.shape[3]), dtype=np.float32)
+        X_with_mask = np.zeros(
+            (self.tot_inputs, seg['X'].shape[2], seg['X'].shape[3]), dtype=np.float32
+        )
 
-        # The +1 is because the last element of X_with_mask is the Gulf Mask
-        size_per_day = self.X.shape[1]
+        size_per_day = seg['X'].shape[1]
         for i in range(self.previous_days):
-            # Append the previous days to the X_with_mask
-            start_index = i * size_per_day
-            end_idx = (i * size_per_day) + size_per_day
-            # print(f"start_index: {start_index}, end_idx: {end_idx}. Index: {index - self.previous_days + i + 1}. Original index: {index}")
-            X_with_mask[start_index : end_idx, :, :] = self.X[real_index - self.previous_days + i + 1, :, :, :]
-        
-        # Add the Gulf Mask as the last channel
+            start_idx = i * size_per_day
+            end_idx   = start_idx + size_per_day
+            X_with_mask[start_idx:end_idx, :, :] = (
+                seg['X'][real_index - self.previous_days + i + 1, :, :, :]
+            )
+
+        # Gulf mask is always the last channel
         X_with_mask[-1, :, :] = self.gulf_mask
 
         if self.dataset_type == "extended":
-            #noise_level = 0.2  # Default is 0.5 low is 0.1
-            #noise = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level
-            # Add the previous two states with some noise at locations -2 and -3
-            #X_with_mask[-2, :, :] = self.aux_Y[real_index-1, :, :]# + noise
-            #X_with_mask[-3, :, :] = self.aux_Y[real_index-2, :, :]# + noise
-            time_index = np.datetime64(self.time[real_index])
-            t1 = time_index - self.dt
-            t2 = t1 - self.dt
+            time_index = np.datetime64(seg['time'][real_index])
+            t1   = time_index - self.dt
+            t2   = t1 - self.dt
             doy1 = int(pd.Timestamp(t1).day_of_year)
             doy2 = int(pd.Timestamp(t2).day_of_year)
-            X_with_mask[-2, :, :] =self.mdt_normalized.ssh.sel(dayofyear=doy1).data
-            X_with_mask[-3, :, :] =self.mdt_normalized.ssh.sel(dayofyear=doy2).data
+            X_with_mask[-2, :, :] = self.mdt_normalized.ssh.sel(dayofyear=doy1).data
+            X_with_mask[-3, :, :] = self.mdt_normalized.ssh.sel(dayofyear=doy2).data
 
         if self.dataset_type == "gradient":
-            #noise_level_ssh = 0.2
-            #noise_ssh = np.random.randn(self.Y.shape[1],self.Y.shape[2]) * noise_level_ssh
-            # Add the previous two states with some noise and its gradient
-            # X_with_mask[-2, :, :] = self.aux_Y[real_index-1, :, :]
-            # X_with_mask[-3, :, :] = self.aux_Y[real_index-2, :, :]
-            time_index = np.datetime64(self.time[real_index])
-            t1 = time_index - self.dt
-            t2 = t1 - self.dt
+            time_index = np.datetime64(seg['time'][real_index])
+            t1   = time_index - self.dt
+            t2   = t1 - self.dt
             doy1 = int(pd.Timestamp(t1).day_of_year)
             doy2 = int(pd.Timestamp(t2).day_of_year)
-            X_with_mask[-2, :, :] =self.mdt_normalized.ssh.sel(dayofyear=doy1).data
-            X_with_mask[-3, :, :] =self.mdt_normalized.ssh.sel(dayofyear=doy2).data
+            X_with_mask[-2, :, :] = self.mdt_normalized.ssh.sel(dayofyear=doy1).data
+            X_with_mask[-3, :, :] = self.mdt_normalized.ssh.sel(dayofyear=doy2).data
 
-        # Only for testing purposes plot the input data
+        if self.dataset_type == "gaussian_noise":
+            noise_level = 0.2
+            noise_ssh = np.random.randn(self.lats.shape[0],self.lons.shape[0]) * noise_level
+            X_with_mask[-2, :, :] = seg['Y'][real_index-1 - self.previous_days + i + 1] + noise_ssh
+            X_with_mask[-3, :, :] = seg['Y'][real_index-2 - self.previous_days + i + 1] + noise_ssh
+
         if self.plot_data:
             input_names = ["chl", "ssh_track", "swot"]
-            plot_single_batch_element(X_with_mask, self.Y[index], input_names, self.previous_days, 
-                                      #f"/unity/f1/ozavala/OUTPUTS/HR_SSH_from_Chlora/trainings/batch_example_{index}.jpg",
-                                      f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_validation_example_{index}.jpg",
-                                      self.lats, self.lons, dataset_type=self.dataset_type)
+            plot_single_batch_element(
+                X_with_mask, seg['Y'][real_index], input_names, self.previous_days,
+                f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_validation_example_{index}.jpg",
+                self.lats, self.lons, dataset_type=self.dataset_type,
+            )
 
-        return X_with_mask, self.Y[real_index].unsqueeze(0)
+        return X_with_mask, seg['Y'][real_index].unsqueeze(0)
+
+    # ── misc helpers ─────────────────────────────────────────────────────────
 
     def get_scaler(self):
         return self.scaler
-    
+
     def normalize(self, x):
         return self.scaler.transform(x)
 
     def denormalize(self, x):
         return self.scaler.inverse_transform(x)
 
-
     def get_coords(self):
         """
-        Get the coordinates of the dataset
+        Return (lats, lons, times) where *times* is the concatenation of the
+        valid time slices from every segment (i.e. skipping the leading
+        ``previous_days`` rows that can never be returned as samples).
         """
-        return self.lats, self.lons, self.time[self.valid_start_idx:]
+        all_times = np.concatenate([
+            seg['time'][self.valid_start_idx : self.valid_start_idx + seg['length']]
+            for seg in self._segments
+        ])
+        return self.lats, self.lons, all_times
 
+
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-# Main function to test the dataset
-    #data_dir = "/Net/work/ozavala/OUTPUTS/HR_SSH_from_Chlora/training_data"
-    data_dir = "/unity/g2/jvelasco/dataset/ugos/datasets_v2/"
-    batch_size = 1
-    training = False
-    plot_data = False
+    data_dir      = "/unity/g2/jvelasco/dataset/ugos/datasets_v2/"
+    batch_size    = 1
+    training      = False
+    plot_data     = False
     previous_days = 7
-    dataset_type = "gradient"
-    shuffle = True
-    input_vars = ["fused_ssh"]
+    dataset_type  = "gradient"
+    shuffle       = True
+    input_vars    = ["fused_ssh"]
 
-    # Create an instance of the SimSatelliteDataset
-    dataset = SimSatelliteDataset(data_dir, previous_days=previous_days, transform=None,
-                                   plot_data=plot_data, training=training, dataset_type=dataset_type, input_vars=input_vars)
+    # ── single-file mode (original behaviour, unchanged) ────────────────────
+    dataset_single = SimSatelliteDataset(
+        data_dir, previous_days=previous_days, transform=None,
+        plot_data=plot_data, training=training,
+        dataset_type=dataset_type, input_vars=input_vars,
+    )
+    print(f"Single-file dataset length: {len(dataset_single)}")
 
-    # Create a data loader for the dataset
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-#
-    # Iterate over the data loader
-    for batch_idx, (x, y) in enumerate(data_loader):
-        # Print the batch index and the batch size
-        print(f"Batch {batch_idx}: x.shape = {x.shape}, y.shape = {y.shape}")
+    # ── multi-file mode ──────────────────────────────────────────────────────
+    dataset_multi = SimSatelliteDataset(
+        data_dir, previous_days=previous_days, transform=None,
+        plot_data=plot_data, training=training,
+        dataset_type=dataset_type, input_vars=input_vars,
+        pkl_files=["training_2018.pkl", "training_2019.pkl", "training_2020.pkl"],
+    )
+    print(f"Multi-file dataset length: {len(dataset_multi)}")
+
+    loader = torch.utils.data.DataLoader(dataset_multi, batch_size=batch_size, shuffle=shuffle)
+    for batch_idx, (x, y) in enumerate(loader):
+        print(f"Batch {batch_idx}: x.shape={x.shape}  y.shape={y.shape}")
         if batch_idx > 0:
             break
 

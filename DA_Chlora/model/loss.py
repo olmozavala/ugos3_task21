@@ -198,13 +198,16 @@ def mse_loss_with_mask(output: torch.Tensor, target: torch.Tensor, mask: torch.T
 def total_variation_loss(output: torch.Tensor, 
                          target: torch.Tensor, 
                          data: Optional[torch.Tensor] = None, 
-                         mask: Optional[torch.Tensor] = None, 
+                         mask: Optional[torch.Tensor] = None,
+                         regularization: str = "l1",
                          eps: float = 1e-10) -> torch.Tensor:
     """
     Total variation loss (masked, mean over valid neighbor pairs).
 
     Notes:
     - `target` is unused (TV is a regularizer on `output`).
+    - `regularization` is the type of regularization to use. Options are: 'l1' or 'l2'
+
     - If a mask is available, we only count differences where BOTH neighboring
       pixels are valid.
     """
@@ -212,16 +215,21 @@ def total_variation_loss(output: torch.Tensor,
     mask = _extract_mask(mask, data)
     mask_b1hw, _ = _valid_points_from_mask(mask, output, eps=eps)
 
-    # Horizontal neighbor differences (along H)
+    # this is VERTICAL (along height)
     diff_h = output[..., 1:, :] - output[..., :-1, :]
     mask_h = mask_b1hw[..., 1:, :] * mask_b1hw[..., :-1, :]
 
-    # Vertical neighbor differences (along W)
+    # this is HORIZONTAL (along width)
     diff_w = output[..., 1:] - output[..., :-1]
     mask_w = mask_b1hw[..., 1:] * mask_b1hw[..., :-1]
-
-    tv_h = (diff_h.square() * mask_h).sum()
-    tv_w = (diff_w.square() * mask_w).sum()
+    if regularization == "l1":
+        tv_h = (diff_h.abs() * mask_h).sum()
+        tv_w = (diff_w.abs() * mask_w).sum()
+    elif regularization == "l2":
+        tv_h = (diff_h.square() * mask_h).sum()
+        tv_w = (diff_w.square() * mask_w).sum()
+    else:
+       raise ValueError(f"Invalid regularization type: {regularization!r}. Expected 'l1' or 'l2'")
 
     denom = mask_h.sum() + mask_w.sum() + output.new_tensor(eps)
     return (tv_h + tv_w) / denom
@@ -248,13 +256,28 @@ def masked_mse_loss(
     mask_b1hw, valid = _valid_points_from_mask(mask, output, eps=eps)
     return (((output - target) ** 2) * mask_b1hw).sum() / valid
 
+def masked_mae_loss(
+    output: torch.Tensor,
+    target: torch.Tensor,
+    data: Optional[torch.Tensor] = None,
+    mask: Optional[torch.Tensor] = None,
+    eps: float = 1e-10,
+) -> torch.Tensor:
+    """
+    Pixelwise MAE reduced by mask (mean over valid points).
+    """
+    output, target = _to_b1hw(output), _to_b1hw(target)
+    mask = _extract_mask(mask, data)
+    mask_b1hw, valid = _valid_points_from_mask(mask, output, eps=eps)
+    return (torch.abs(output - target) * mask_b1hw).sum() / valid
+
 
 def sobel_gradient_magnitude_loss(
     output: torch.Tensor,
     target: torch.Tensor,
     data: Optional[torch.Tensor] = None,
     mask: Optional[torch.Tensor] = None,
-    normalize: bool = True,
+    normalize: bool = False,
     regularization: str = "l2",
     eps: float = 1e-10,
 ) -> torch.Tensor:
@@ -277,21 +300,29 @@ def sobel_gradient_magnitude_loss(
     if regularization == "l1":
         grad_x = torch.abs(grad_output_x - grad_target_x)
         grad_y = torch.abs(grad_output_y - grad_target_y)
+        total_grad = grad_x + grad_y
     # L2 norm
     elif regularization == "l2":
         grad_x = (grad_output_x - grad_target_x)**2
         grad_y = (grad_output_y - grad_target_y)**2
+        total_grad = grad_x + grad_y
     #L infinity norm
     elif regularization == "linf":
-        grad_x = torch.max(torch.abs(grad_output_x - grad_target_x), torch.abs(grad_output_y - grad_target_y))
-        grad_y = torch.max(torch.abs(grad_output_x - grad_target_x), torch.abs(grad_output_y - grad_target_y))
+        grad_x = torch.abs(grad_output_x - grad_target_x)
+        grad_y = torch.abs(grad_output_y - grad_target_y)
+        total_grad = torch.max(grad_x, grad_y)
+    elif regularization == "magnitude":
+        mag_output = torch.sqrt(grad_output_x**2 + grad_output_y**2)
+        mag_target = torch.sqrt(grad_target_x**2 + grad_target_y**2)
+        total_grad = (mag_output - mag_target)**2
     else:
-        raise ValueError(f"Invalid regularization type: {regularization}", "Expected 'l1', 'l2', or 'linf'")
-
-    total_grad = grad_x + grad_y
+        raise ValueError(f"Invalid regularization type: {regularization!r}. Expected 'l1', 'l2', 'linf', or 'magnitude'")
 
     if normalize:
-        total_grad = (total_grad - total_grad.mean()) / (total_grad.std() + eps)
+        valid_vals = total_grad[mask_b1hw.bool()]
+        mean = valid_vals.mean()
+        std = valid_vals.std()
+        total_grad = (total_grad - mean) / (std + eps)
 
     return (total_grad * mask_b1hw).sum() / valid
 
@@ -317,8 +348,14 @@ def laplacian_curvature_loss(
     curv_target = F.conv2d(target, k, padding=1)
 
     if normalize:
-        curv_output = (curv_output - curv_output.mean()) / (curv_output.std() + eps)
-        curv_target = (curv_target - curv_target.mean()) / (curv_target.std() + eps)
+        valid_vals = curv_output[mask_b1hw.bool()]
+        valid_targ = curv_target[mask_b1hw.bool()]
+        mean_output = valid_vals.mean()
+        mean_target = valid_targ.mean()
+        std_output = valid_vals.std()
+        std_target = valid_targ.std()
+        curv_output = (curv_output - mean_output) / (std_output + eps)
+        curv_target = (curv_target - mean_target) / (std_target + eps)
 
     return (((curv_output - curv_target) ** 2) * mask_b1hw).sum() / valid
 

@@ -16,6 +16,8 @@ def get_activation(activation):
         return nn.Sigmoid()
     elif activation == "leaky_relu":
         return nn.LeakyReLU()
+    elif activation == "gelu":
+        return nn.GELU()
     else:
         raise ValueError(f"Activation {activation} not supported")
 
