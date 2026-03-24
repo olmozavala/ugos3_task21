@@ -4,6 +4,7 @@ from torchvision.utils import make_grid
 import torch.nn.functional as F
 from base import BaseTrainer
 from utils import inf_loop, MetricTracker
+from model.metric import gaussian_blur, masked_rmse, gradient_rmse
 
 
 class Trainer(BaseTrainer):
@@ -79,6 +80,16 @@ class Trainer(BaseTrainer):
                 output_metric = output.unsqueeze(1) if output.dim() == 3 else output
                 self.train_metrics.update(met.__name__, met(output_metric, target))
 
+            with torch.no_grad():
+                mask = data[:, -1:, :, :]
+                pred_lf = gaussian_blur(output.detach(), sigma=5)
+                pred_hf = output.detach() - pred_lf
+                tgt_lf = gaussian_blur(target, sigma=5)
+                tgt_hf = target - tgt_lf
+                self.writer.add_scalar('rmse/large_scale', masked_rmse(pred_lf, tgt_lf, mask).item())
+                self.writer.add_scalar('rmse/small_scale', masked_rmse(pred_hf, tgt_hf, mask).item())
+                self.writer.add_scalar('rmse/gradient', gradient_rmse(output.detach(), target, mask).item())
+
             if batch_idx % self.log_step == 0:
                 loss_breakdown = ""
                 if hasattr(self.criterion, "last_components") and getattr(self.criterion, "last_components"):
@@ -134,6 +145,15 @@ class Trainer(BaseTrainer):
                 for met in self.metric_ftns:
                     output_metric = output.unsqueeze(1) if output.dim() == 3 else output
                     self.valid_metrics.update(met.__name__, met(output_metric, target))
+
+                mask = data[:, -1:, :, :]
+                pred_lf = gaussian_blur(output, sigma=5)
+                pred_hf = output - pred_lf
+                tgt_lf = gaussian_blur(target, sigma=5)
+                tgt_hf = target - tgt_lf
+                self.writer.add_scalar('rmse/large_scale', masked_rmse(pred_lf, tgt_lf, mask).item())
+                self.writer.add_scalar('rmse/small_scale', masked_rmse(pred_hf, tgt_hf, mask).item())
+                self.writer.add_scalar('rmse/gradient', gradient_rmse(output, target, mask).item())
                 # self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
 
         # add histogram of model parameters to the tensorboard
