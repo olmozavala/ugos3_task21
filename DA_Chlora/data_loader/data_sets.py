@@ -1,6 +1,6 @@
 # For testing the dataset
 import sys
-sys.path.append("/unity/g2/jvelasco/github/ml_experiments/multi_vit") # For testing purposes
+sys.path.append("/unity/g2/jvelasco/gitraw/ugos3_task21/DA_Chlora") # Only for testing purposes
 import os
 import bisect
 import pickle
@@ -167,7 +167,7 @@ def _load_pkl_segment(
 
     # Number of valid samples in this segment
     # (mirror the same end_cutoff logic as the original __init__)
-    end_cutoff = 2 if dataset_type in ("extended", "gradient") else 0
+    end_cutoff = 2 if dataset_type == "nemo_mdt" else 0
     length = Y.shape[0] - previous_days - end_cutoff
 
     if length <= 0:
@@ -307,30 +307,55 @@ class SimSatelliteDataset:
         # Gulf mask
         gulf_mask = np.where(~np.isnan(_Y0_raw[0, :new_height, :new_width]), 1, 0)
         gulf_mask[:100, :300] = 0
+        #TODO: We need to add a masking for the erronious data points in all the ssh
+
         gulf_mask = cv2.erode(
             gulf_mask.astype(np.uint8), np.ones((3, 3), dtype=np.uint8), iterations=3
         )
         gulf_mask = clean_gulf_mask(gulf_mask, min_size=1000).astype(np.uint8)
-        #gulf_mask = gulf_mask[:new_height, :new_width]
+
         self.gulf_mask = torch.tensor(gulf_mask, dtype=torch.float32)
         del _Y0_raw
 
-        # MDT
-        self.mdt_normalized = xr.open_dataset(join(data_dir, "mdt_normalized.nc")).load()
-        self.mdt_normalized.ssh.data = np.where(
-            np.isnan(self.mdt_normalized.ssh.data), 0, self.mdt_normalized.ssh.data
-        )
-        self.mdt_normalized = self.mdt_normalized.isel(
-            lat=slice(None, new_height),
-            lon=slice(None, new_width),
-        ).load()
+        # TODO: Add logic to only load this data when the correct dataset_type is selected (background)
+        # TODO: We also need logic to decide between Nemo MTD or actual MDT
+
+        # MDT products are only needed for the nemo_mdt dataset type.
+        if dataset_type == "nemo_mdt":
+            # MDT
+            self.mdt_normalized = xr.open_dataset(join(data_dir, "mdt_normalized.nc")).load()
+            self.mdt_normalized.ssh.data = np.where(
+                np.isnan(self.mdt_normalized.ssh.data), 0, self.mdt_normalized.ssh.data
+            )
+            self.mdt_normalized = self.mdt_normalized.isel(
+                lat=slice(None, new_height),
+                lon=slice(None, new_width),
+            ).load()
+
+            # MDT STD
+            self.mdt_std_normalized = xr.open_dataset(join(data_dir, "mdt_std_normalized.nc")).load()
+            self.mdt_std_normalized.ssh.data = np.where(
+                np.isnan(self.mdt_std_normalized.ssh.data), 0, self.mdt_std_normalized.ssh.data
+            )
+            self.mdt_std_normalized = self.mdt_std_normalized.isel(
+                lat=slice(None, new_height),
+                lon=slice(None, new_width),
+            ).load()
+        else:
+            self.mdt_normalized = None
+            self.mdt_std_normalized = None
 
         # ── tot_inputs ───────────────────────────────────────────────────────
         n_ch = self._segments[0]['X'].shape[1]
         if dataset_type == "regular":
             self.tot_inputs = n_ch * self.previous_days + 1
-        elif dataset_type in ("extended", "gradient", "gaussian_noise"):
+        elif dataset_type in ("nemo_mdt", "gaussian_noise"):
             self.tot_inputs = n_ch * self.previous_days + 3
+        elif dataset_type == "gaussian_noise_only":
+            # Two previous SSH snapshots (with Gaussian noise) + gulf mask.
+            self.tot_inputs = 3
+        
+        # TODO: Need to add logic to add std to the input tensor
 
         print(
             f"Dataset ready: {len(self._segments)} segment(s), "
@@ -359,9 +384,26 @@ class SimSatelliteDataset:
     def __getitem__(self, index):
         seg, real_index = self._resolve_index(index)
 
-        X_with_mask = np.zeros(
-            (self.tot_inputs, seg['X'].shape[2], seg['X'].shape[3]), dtype=np.float32
-        )
+        # Spatial dimensions
+        height = seg['X'].shape[2]
+        width  = seg['X'].shape[3]
+
+        # Special case: gaussian_noise_only → only two noisy SSH snapshots + mask.
+        if self.dataset_type == "gaussian_noise_only":
+            X_with_mask = np.zeros((self.tot_inputs, height, width), dtype=np.float32)
+
+            noise_level = 0.2
+            noise_ssh = np.random.randn(self.lats.shape[0], self.lons.shape[0]) * noise_level
+
+            # Channels: [SSH(t-1)+noise, SSH(t-2)+noise, gulf_mask]
+            X_with_mask[0, :, :] = seg['Y'][real_index - 1] + noise_ssh
+            X_with_mask[1, :, :] = seg['Y'][real_index - 2] + noise_ssh
+            X_with_mask[2, :, :] = self.gulf_mask
+
+            return X_with_mask, seg['Y'][real_index].unsqueeze(0)
+
+        # Default path: include X variables for previous_days plus auxiliary channels.
+        X_with_mask = np.zeros((self.tot_inputs, height, width), dtype=np.float32)
 
         size_per_day = seg['X'].shape[1]
         for i in range(self.previous_days):
@@ -374,16 +416,7 @@ class SimSatelliteDataset:
         # Gulf mask is always the last channel
         X_with_mask[-1, :, :] = self.gulf_mask
 
-        if self.dataset_type == "extended":
-            time_index = np.datetime64(seg['time'][real_index])
-            t1   = time_index - self.dt
-            t2   = t1 - self.dt
-            doy1 = int(pd.Timestamp(t1).day_of_year)
-            doy2 = int(pd.Timestamp(t2).day_of_year)
-            X_with_mask[-2, :, :] = self.mdt_normalized.ssh.sel(dayofyear=doy1).data
-            X_with_mask[-3, :, :] = self.mdt_normalized.ssh.sel(dayofyear=doy2).data
-
-        if self.dataset_type == "gradient":
+        if self.dataset_type == "nemo_mdt":
             time_index = np.datetime64(seg['time'][real_index])
             t1   = time_index - self.dt
             t2   = t1 - self.dt
@@ -394,17 +427,11 @@ class SimSatelliteDataset:
 
         if self.dataset_type == "gaussian_noise":
             noise_level = 0.2
-            noise_ssh = np.random.randn(self.lats.shape[0],self.lons.shape[0]) * noise_level
-            X_with_mask[-2, :, :] = seg['Y'][real_index-1 - self.previous_days + i + 1] + noise_ssh
-            X_with_mask[-3, :, :] = seg['Y'][real_index-2 - self.previous_days + i + 1] + noise_ssh
+            noise_ssh = np.random.randn(self.lats.shape[0], self.lons.shape[0]) * noise_level
+            X_with_mask[-2, :, :] = seg['Y'][real_index - 1] + noise_ssh
+            X_with_mask[-3, :, :] = seg['Y'][real_index - 2] + noise_ssh
 
-        if self.plot_data:
-            input_names = ["chl", "ssh_track", "swot"]
-            plot_single_batch_element(
-                X_with_mask, seg['Y'][real_index], input_names, self.previous_days,
-                f"/unity/g2/jvelasco/ai_outs/task21_set1/higos/batch_validation_example_{index}.jpg",
-                self.lats, self.lons, dataset_type=self.dataset_type,
-            )
+        # TODO: Need to add logic to add std to the input tensor, first we need to decide the tensor configuration
 
         return X_with_mask, seg['Y'][real_index].unsqueeze(0)
 
@@ -435,14 +462,13 @@ class SimSatelliteDataset:
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     data_dir      = "/unity/g2/jvelasco/dataset/ugos/datasets_v2/"
-    batch_size    = 1
+    batch_size    = 64
     training      = False
     plot_data     = False
     previous_days = 7
-    dataset_type  = "gradient"
+    dataset_type  = "nemo_mdt"
     shuffle       = True
     input_vars    = ["fused_ssh"]
-
     # ── single-file mode (original behaviour, unchanged) ────────────────────
     dataset_single = SimSatelliteDataset(
         data_dir, previous_days=previous_days, transform=None,
@@ -456,7 +482,7 @@ if __name__ == "__main__":
         data_dir, previous_days=previous_days, transform=None,
         plot_data=plot_data, training=training,
         dataset_type=dataset_type, input_vars=input_vars,
-        pkl_files=["training_2018.pkl", "training_2019.pkl", "training_2020.pkl"],
+        pkl_files=["training.pkl", "training_p2.pkl", "training_p3.pkl"],
     )
     print(f"Multi-file dataset length: {len(dataset_multi)}")
 
@@ -465,5 +491,50 @@ if __name__ == "__main__":
         print(f"Batch {batch_idx}: x.shape={x.shape}  y.shape={y.shape}")
         if batch_idx > 0:
             break
+
+    import torch
+    import torch.nn.functional as F
+
+    def compute_derivative_variances(dataloader):
+        """
+        Compute dataset-level variances of first and second derivatives
+        of SSH, to be used as fixed normalizers in the loss.
+        Batches from the loader are (inputs, target) with inputs (B, C, H, W)
+        and target (B, 1, H, W); the last channel of inputs is the gulf mask.
+        """
+        _SOBEL_X = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]], dtype=torch.float32, requires_grad=False).view(1, 1, 3, 3)
+        _SOBEL_Y = torch.tensor([[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]], dtype=torch.float32, requires_grad=False).view(1, 1, 3, 3)
+        _LAPLACE = torch.tensor([[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]], dtype=torch.float32, requires_grad=False).view(1, 1, 3, 3)
+
+        kx = _SOBEL_X
+        ky = _SOBEL_Y
+        k_lap = _LAPLACE
+
+        sum_grad_sq = 0.0
+        sum_curv_sq = 0.0
+        n = 0
+
+        for inputs, eta in dataloader:
+            # eta: (B, 1, H, W), mask from last channel of inputs: (B, H, W)
+            mask = inputs[:, -1, :, :]
+            grad_x = F.conv2d(eta, kx, padding=1)
+            grad_y = F.conv2d(eta, ky, padding=1)
+            curv = F.conv2d(eta, k_lap, padding=1)
+
+            valid = mask.bool()  # (B, H, W)
+            valid_3d = valid.unsqueeze(1)  # (B, 1, H, W) for indexing grad/curv
+            sum_grad_sq += (grad_x[valid_3d].pow(2) + grad_y[valid_3d].pow(2)).sum().item()
+            sum_curv_sq += curv[valid_3d].pow(2).sum().item()
+            n += valid.sum().item()
+
+        if n == 0:
+            return float("nan"), float("nan")
+        var_grad = sum_grad_sq / n
+        var_curv = sum_curv_sq / n
+        return var_grad, var_curv
+
+    var_grad, var_curv = compute_derivative_variances(loader)
+    print(f"Variance of first derivatives: {var_grad}")
+    print(f"Variance of second derivatives: {var_curv}")
 
     print("Done!")

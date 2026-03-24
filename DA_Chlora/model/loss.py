@@ -16,6 +16,11 @@ All losses are callable as:
 
 If `mask` is not provided and `data` is provided, the mask is extracted from
 `data[:, -1, :, :]` (last input channel).
+
+### For the NEMO dataset, between (2016-04-01, 2021-07-04) ###
+#  Variance of first derivatives: 0.15808774535211767        #
+#  Variance of second derivatives: 0.008478596971365743      #
+##############################################################
 """
 
 from __future__ import annotations
@@ -32,6 +37,9 @@ import torch.nn.functional as F
 _SOBEL_X = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]], dtype=torch.float32, requires_grad=False).view(1, 1, 3, 3)
 _SOBEL_Y = torch.tensor([[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]], dtype=torch.float32, requires_grad=False).view(1, 1, 3, 3)
 _LAPLACE = torch.tensor([[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]], dtype=torch.float32, requires_grad=False).view(1, 1, 3, 3)
+
+_VAR_GRAD = 0.15808774535211767
+_VAR_CURV = 0.008478596971365743
 
 
 def _to_b1hw(x: torch.Tensor) -> torch.Tensor:
@@ -235,7 +243,6 @@ def total_variation_loss(output: torch.Tensor,
     return (tv_h + tv_w) / denom
 
 
-
 # ----------------------------
 # Mask-aware terms used in Trainer (pixel / gradient / curvature)
 # ----------------------------
@@ -324,7 +331,7 @@ def sobel_gradient_magnitude_loss(
         std = valid_vals.std()
         total_grad = (total_grad - mean) / (std + eps)
 
-    return (total_grad * mask_b1hw).sum() / valid
+    return (total_grad * mask_b1hw).sum() / valid / _VAR_GRAD
 
 
 def laplacian_curvature_loss(
@@ -332,7 +339,7 @@ def laplacian_curvature_loss(
     target: torch.Tensor,
     data: Optional[torch.Tensor] = None,
     mask: Optional[torch.Tensor] = None,
-    normalize: bool = True,
+    normalize: bool = False,
     eps: float = 1e-10,
 ) -> torch.Tensor:
     """
@@ -357,7 +364,7 @@ def laplacian_curvature_loss(
         curv_output = (curv_output - mean_output) / (std_output + eps)
         curv_target = (curv_target - mean_target) / (std_target + eps)
 
-    return (((curv_output - curv_target) ** 2) * mask_b1hw).sum() / valid
+    return (((curv_output - curv_target) ** 2) * mask_b1hw).sum() / valid / _VAR_CURV
 
 def spectral_logloss(
     output: torch.Tensor,
@@ -372,20 +379,74 @@ def spectral_logloss(
     output, target = _to_b1hw(output), _to_b1hw(target)
     mask = _extract_mask(mask, data)
     mask_b1hw, valid = _valid_points_from_mask(mask, output, eps=eps)
+    
+    # 0. Apply Hanning window to prevent edge effects
+    H, W = output.shape[-2], output.shape[-1]
+    window_h = torch.hann_window(H, device=output.device).view(-1, 1)
+    window_w = torch.hann_window(W, device=output.device).view(1, -1)
+    window = window_h * window_w
+
     # 1. Compute the 2D Real FFT
-    freq_output = torch.fft.rfft2(output * mask_b1hw, norm='ortho')
-    freq_target = torch.fft.rfft2(target * mask_b1hw, norm='ortho')
+    freq_output = torch.fft.rfft2(output * mask_b1hw * window, norm='ortho')
+    freq_target = torch.fft.rfft2(target * mask_b1hw * window, norm='ortho')
 
     # 2. Compute Magnitude Spectrum
-    mag_output = torch.abs(freq_output)
-    mag_target = torch.abs(freq_target)
+    mag_output = torch.abs(freq_output)**2
+    mag_target = torch.abs(freq_target)**2
 
     # 3. Apply Log transform
     log_mag_output = torch.log(mag_output + eps)
     log_mag_target = torch.log(mag_target + eps)
 
     # 4. Compute the loss
-    return ((log_mag_output - log_mag_target)**2).sum() / valid
+    return ((log_mag_output - log_mag_target) ** 2).mean()
+
+def spectral_slope_loss(
+    output: torch.Tensor,
+    target: torch.Tensor,
+    data: Optional[torch.Tensor] = None,
+    mask: Optional[torch.Tensor] = None,
+    eps: float = 1e-10,
+    k_min: float = 0.05,
+    k_max: float = 0.2
+) -> torch.Tensor:
+    """
+    Spectral slope loss.
+    """
+    output, target = _to_b1hw(output), _to_b1hw(target)
+    mask = _extract_mask(mask, data)
+    mask_b1hw, valid = _valid_points_from_mask(mask, output, eps=eps)
+    
+    # 0. Apply Hanning window to prevent edge effects
+    H, W = output.shape[-2], output.shape[-1]
+    window_h = torch.hann_window(H, device=output.device).view(-1, 1)
+    window_w = torch.hann_window(W, device=output.device).view(1, -1)
+    window = window_h * window_w
+
+    freq_output = torch.fft.rfft2(output * mask_b1hw * window, norm='ortho')
+    freq_target = torch.fft.rfft2(target * mask_b1hw * window, norm='ortho')
+
+    log_power_output = torch.log(torch.abs(freq_output)**2 + eps)
+    log_power_target = torch.log(torch.abs(freq_target)**2 + eps)
+
+    kx = torch.fft.rfftfreq(W, device=output.device)  # shape (W//2+1,)
+    ky = torch.fft.fftfreq(H, device=output.device)   # shape (H,)
+    KX, KY = torch.meshgrid(ky, kx, indexing='ij')  # shape (H, W//2+1)
+    k_mag = torch.sqrt(KX**2 + KY**2).clamp(min=1e-10)  # avoid log(0) at DC
+
+    log_k = torch.log(k_mag)  # shape (H, W//2+1)
+
+    # Fit linear slope in log-log space within submesoscale band only
+    d_log_power_output = log_power_output[..., 1:] - log_power_output[..., :-1]
+    d_log_power_target = log_power_target[..., 1:] - log_power_target[..., :-1]
+    d_log_k = (log_k[..., 1:] - log_k[..., :-1]).clamp(min=1e-10)
+
+    slope_output = d_log_power_output / d_log_k
+    slope_target = d_log_power_target / d_log_k
+
+    diff = (slope_output - slope_target)**2
+
+    return diff.mean() / (slope_target.var() + eps)
 
 
 # ----------------------------

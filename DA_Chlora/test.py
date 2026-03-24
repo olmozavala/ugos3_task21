@@ -35,7 +35,7 @@ styles = {
 }
 
 # ------------------------------------------------------
-
+# TODO: find a way to make the plot_data more flexible and robust, specifically handle cases where only one input variable is provided.
 def plot_data(data: np.ndarray,
               target: np.ndarray,
               previous_days: int,
@@ -156,11 +156,15 @@ def _plot_one_sample(args):
         join(output_dir, f"{model_name}_ex_{ex_num:03d}_predictions.png"),
         lats, lons, sample_time,
     )
-    plot_data(
-        data_np, target_m, days_before,
-        join(output_dir, f"{model_name}_ex_{ex_num:03d}.png"),
-        lats, lons, input_vars, sample_time,
-    )
+    try:
+        plot_data(
+            data_np, target_m, days_before,
+            join(output_dir, f"{model_name}_ex_{ex_num:03d}.png"),
+            lats, lons, input_vars, sample_time,
+        )
+    except Exception as e:
+        print(f"Error plotting data: {e}")
+
     psd_output = compute_psd(output_np - mean_ssh, lats, lons)
     psd_target = compute_psd(target_np - mean_ssh, lats, lons)
     plot_psd(
@@ -277,7 +281,7 @@ def main(config):
     validation_times = []  # sample time for each validation_loss entry
     psd_output_list  = []
     psd_target_list  = []
-    save_predictions = False
+    save_predictions = True
     n_plot_workers = len(os.sched_getaffinity(0)) - 2
     print(f"Number of workers for plotting: {n_plot_workers}")
     with torch.no_grad():
@@ -343,8 +347,10 @@ def main(config):
                         {
                             "output": (["latitude", "longitude"], output[j].detach().cpu().numpy()),
                             "target": (["latitude", "longitude"], target[j].detach().cpu().numpy()),
+                            "mask": (["latitude", "longitude"], mask[j].detach().cpu().numpy()),
                         },
                         coords={"latitude": lats, "longitude": lons},
+                        attrs={"date": pd.Timestamp(np.datetime64(sample_time[j])).strftime("%Y-%m-%d")},
                     ).to_netcdf(join(output_dir, f"pred_batch_{i}_sample_{j}.nc"))
 
     # ------------------------------------------------------------------

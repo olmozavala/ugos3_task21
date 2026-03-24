@@ -22,6 +22,17 @@ sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
 
+def _get_model_expected_input_channels(model):
+    """Return in_channels of the first Conv2d in the model (handles DataParallel / torch.compile)."""
+    m = getattr(model, "module", model)
+    if hasattr(m, "_orig_mod"):
+        m = m._orig_mod
+    for mod in m.modules():
+        if isinstance(mod, torch.nn.Conv2d):
+            return mod.weight.shape[1]
+    return None
+
+
 def main(config):
     logger = config.get_logger("train")
 
@@ -38,6 +49,54 @@ def main(config):
     if len(device_ids) > 1:
         model = torch.nn.DataParallel(model, device_ids=device_ids)
     model = torch.compile(model)
+
+    # Startup check: data loader output channels must match model's first conv in_channels
+    batch = next(iter(data_loader))
+    batch_channels = batch[0].shape[1]
+    expected_channels = _get_model_expected_input_channels(model)
+    if expected_channels is not None and batch_channels != expected_channels:
+        # Pull relevant config values for a more informative error message.
+        cfg       = config.config
+        dl_args   = cfg.get("data_loader", {}).get("args", {}) or {}
+        arch_args = cfg.get("arch", {}).get("args", {}) or {}
+
+        dl_dataset_type   = dl_args.get("dataset_type", None)
+        arch_dataset_type = arch_args.get("dataset_type", None)
+        prev_days         = dl_args.get("previous_days", arch_args.get("previous_days", None))
+        in_channels_cfg   = arch_args.get("in_channels", None)
+
+        details_lines = [
+            "Input channel mismatch between data loader and model.",
+            f"  data loader channels (from batch[0].shape[1]) = {batch_channels}",
+            f"  model first Conv2d in_channels               = {expected_channels}",
+            "",
+            "Config summary:",
+            f"  data_loader.args.dataset_type                = {dl_dataset_type!r}",
+            f"  arch.args.dataset_type                       = {arch_dataset_type!r}",
+            f"  data_loader.args.previous_days               = {prev_days}",
+            f"  arch.args.in_channels                        = {in_channels_cfg}",
+        ]
+
+        # Add dataset-type specific guidance when we know more about the layout.
+        if dl_dataset_type == "gaussian_noise_only":
+            details_lines += [
+                "",
+                "For dataset_type='gaussian_noise_only', SimSatelliteDataset currently "
+                "constructs exactly 3 input channels per sample:",
+                "  [SSH(t-1) + Gaussian noise, SSH(t-2) + Gaussian noise, gulf_mask].",
+                "Ensure your architecture's first Conv2d expects 3 channels for this "
+                "dataset_type (or adjust the dataset implementation and config accordingly).",
+            ]
+
+        details_lines += [
+            "",
+            "Fix by aligning the model and data configuration, for example by:",
+            "  - keeping arch.args.dataset_type in sync with data_loader.args.dataset_type, and",
+            "  - choosing arch/UNet logic so its first Conv2d in_channels matches the loader "
+            "output channel count.",
+        ]
+
+        raise RuntimeError("\n".join(details_lines))
 
     # Loss / metrics / optimiser / scheduler
     criterion = module_loss.build_loss(config["loss"])

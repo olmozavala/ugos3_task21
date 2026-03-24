@@ -147,3 +147,4 @@ debug_*
 config_*.yml
 logs/
 training_config_files/
+experiment_files/

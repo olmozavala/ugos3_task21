@@ -74,10 +74,16 @@ class UNet(BaseModel):
         print("UNet model")
         cur_filters = -1  # Just initialize current filters
 
-        if dataset_type != "regular":
-            in_channels = in_channels * previous_days + 3
-        else:
+        # Derive the effective number of input channels expected by the first Conv2d.
+        # This must stay in sync with SimSatelliteDataset.tot_inputs / __getitem__.
+        if dataset_type == "gaussian_noise_only":
+            # Two previous SSH snapshots with Gaussian noise + gulf mask.
+            in_channels = 3
+        elif dataset_type == "regular":
             in_channels = in_channels * previous_days + 1
+        else:
+            # e.g. "nemo_mdt", "gaussian_noise"
+            in_channels = in_channels * previous_days + 3
 
         out_channels = 1
 
@@ -177,10 +183,13 @@ class UNetNoSkip(BaseModel):
         print("UNetNoSkip model (no skip connections)")
         cur_filters = -1
 
-        if dataset_type != "regular":
-            in_channels = in_channels * previous_days + 3
-        else:
+        # Derive the effective number of input channels expected by the first Conv2d.
+        if dataset_type == "gaussian_noise_only":
+            in_channels = 3
+        elif dataset_type == "regular":
             in_channels = in_channels * previous_days + 1
+        else:
+            in_channels = in_channels * previous_days + 3
 
         out_channels = 1
 

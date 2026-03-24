@@ -56,6 +56,11 @@ class ConfigParser:
         self._sync_in_channels_with_data_loader()
 
         # ------------------------------------------------------------------
+        # Sync arch.dataset_type from data_loader so model and data match
+        # ------------------------------------------------------------------
+        self._sync_dataset_type_with_data_loader()
+
+        # ------------------------------------------------------------------
         # Build directory paths
         # ------------------------------------------------------------------
         save_dir = Path(self._config["trainer"]["save_dir"])
@@ -216,6 +221,35 @@ class ConfigParser:
                 f"  inferred from data_loader       = {inferred}\n"
                 "Fix: set `arch.args.in_channels` to null (auto) or align "
                 "`data_loader.args.input_vars`."
+            )
+
+    def _sync_dataset_type_with_data_loader(self):
+        """Set arch.args.dataset_type from data_loader.args.dataset_type so model and data stay in sync."""
+        dl = self._config.get("data_loader", {})
+        dl_args = dl.get("args", {}) if isinstance(dl, dict) else {}
+        if not isinstance(dl_args, dict):
+            return
+
+        dl_dataset_type = dl_args.get("dataset_type", None)
+        if dl_dataset_type is None:
+            return
+
+        arch = self._config.get("arch", {})
+        arch_args = arch.get("args", {}) if isinstance(arch, dict) else {}
+        if not isinstance(arch_args, dict):
+            return
+
+        current = arch_args.get("dataset_type", None)
+        if current is None or current == "auto":
+            arch_args["dataset_type"] = dl_dataset_type
+            return
+
+        if current != dl_dataset_type:
+            raise ValueError(
+                "Config mismatch: `arch.args.dataset_type` must match `data_loader.args.dataset_type`.\n"
+                f"  arch.args.dataset_type         = {current!r}\n"
+                f"  data_loader.args.dataset_type  = {dl_dataset_type!r}\n"
+                "Fix: set `arch.args.dataset_type` to null (auto) or align with data_loader."
             )
 
     # ------------------------------------------------------------------
