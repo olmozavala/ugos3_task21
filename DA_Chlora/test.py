@@ -205,7 +205,7 @@ def main(config):
         num_workers=dl_args["num_workers"],
         previous_days=dl_args["previous_days"],
         dataset_type=dl_args["dataset_type"],
-        input_vars=dl_args["input_vars"],
+        input_vars=None,#dl_args["input_vars"],
     )
 
     # ------------------------------------------------------------------
