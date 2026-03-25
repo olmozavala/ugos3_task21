@@ -281,7 +281,7 @@ def main(config):
     validation_times = []  # sample time for each validation_loss entry
     psd_output_list  = []
     psd_target_list  = []
-    save_predictions = True
+    save_predictions = False
     n_plot_workers = len(os.sched_getaffinity(0)) - 2
     print(f"Number of workers for plotting: {n_plot_workers}")
     with torch.no_grad():
@@ -365,10 +365,17 @@ def main(config):
     # Mean PSD plot
     psd_output_array = np.array(psd_output_list).mean(axis=0)
     psd_target_array = np.array(psd_target_list).mean(axis=0)
+    pd.DataFrame(
+        {
+            "k_bin": k_bins,
+            "psd_output_mean": psd_output_array,
+            "psd_target_mean": psd_target_array,
+        }
+    ).to_csv(join(output_dir, "mean_psd.csv"), index=False)
     plot_psd(
         [(psd_output_array, k_bins), (psd_target_array, k_bins)],
         add_reference=True,
-        labels=["ML spectrum", "DUACS spectrum"],
+        labels=["ML spectrum", "True spectrum"],
         path=output_dir,
         title="Mean PSD of the output and target",
         filename="mean_psd.png",

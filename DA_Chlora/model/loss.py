@@ -331,7 +331,7 @@ def sobel_gradient_magnitude_loss(
         std = valid_vals.std()
         total_grad = (total_grad - mean) / (std + eps)
 
-    return (total_grad * mask_b1hw).sum() / valid / _VAR_GRAD
+    return (total_grad * mask_b1hw).sum() / valid #/ _VAR_GRAD
 
 
 def laplacian_curvature_loss(
