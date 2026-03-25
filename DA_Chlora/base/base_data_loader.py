@@ -1,7 +1,24 @@
 import numpy as np
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data.sampler import SubsetRandomSampler
+
+
+class SubsetSequentialSampler(Sampler):
+    """Yields subset indices in fixed (sorted) order — no shuffle.
+
+    Used for the validation DataLoader so that batch positions map
+    deterministically to dataset indices, enabling date-aware metrics
+    (e.g. seasonal RMSE) without modifying __getitem__.
+    """
+    def __init__(self, indices):
+        self.indices = indices
+
+    def __iter__(self):
+        return iter(self.indices)
+
+    def __len__(self):
+        return len(self.indices)
 
 
 class BaseDataLoader(DataLoader):
@@ -45,8 +62,18 @@ class BaseDataLoader(DataLoader):
         valid_idx = idx_full[0:len_valid]
         train_idx = np.delete(idx_full, np.arange(0, len_valid))
 
-        train_sampler = SubsetRandomSampler(train_idx)
-        valid_sampler = SubsetRandomSampler(valid_idx)
+        if self.shuffle:
+            train_sampler = SubsetRandomSampler(train_idx)
+        else:
+            # Sequential train sampler: batch position maps deterministically
+            # to a dataset index, enabling date-aware metrics (e.g. seasonal RMSE).
+            train_idx = np.sort(train_idx)
+            train_sampler = SubsetSequentialSampler(train_idx)
+            self._iter_indices = train_idx  # indices iterated by this DataLoader, in order
+
+        # Always sort validation holdout indices (used by split_validation())
+        valid_idx = np.sort(valid_idx)
+        valid_sampler = SubsetSequentialSampler(valid_idx)
 
         # turn off shuffle option which is mutually exclusive with sampler
         self.shuffle = False

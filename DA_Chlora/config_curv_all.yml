@@ -47,13 +47,16 @@ optimizer:
 loss:
   - name: masked_mse_loss
     weight: 1.0
+    # start_epoch: 1  # default — active from epoch 1
   - name: sobel_gradient_magnitude_loss
     weight: 0.1
+    # start_epoch: 50  # example: activate gradient loss only after epoch 50
     args:
       normalize: false
       regularization: l2
   - name: laplacian_curvature_loss
     weight: 0.25
+    # start_epoch: 100  # example: activate curvature loss only after epoch 100
     args:
       normalize: false
 
@@ -73,6 +76,9 @@ trainer:
   monitor: min val_loss
   early_stop: 10
   tensorboard: true
+  spectral_log_freq: 10    # log spectral diagnostics every N epochs (P1)
+  gradient_hist_freq: 50   # log gradient histograms every N epochs (P4)
+  attribution_freq: 25     # log input channel attribution every N epochs (P5)
 
 tester:
   # weights_dir: can be

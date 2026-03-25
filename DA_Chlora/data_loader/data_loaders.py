@@ -21,6 +21,10 @@ class DefaultDataLoader(BaseDataLoader):
         pkl_files=None,         # ← NEW: forwarded to SimSatelliteDataset
     ):
         self.data_dir = data_dir
+        if not training:
+            # Validation never needs shuffling; sequential order enables
+            # date-to-batch mapping for metrics like seasonal RMSE.
+            shuffle = False
         self.dataset = SimSatelliteDataset(
             self.data_dir,
             transform=None,
@@ -34,3 +38,12 @@ class DefaultDataLoader(BaseDataLoader):
             pkl_files=pkl_files,    # ← forwarded
         )
         super().__init__(self.dataset, batch_size, shuffle, validation_split, num_workers)
+
+    @property
+    def iter_indices(self):
+        """Dataset indices actually iterated by this DataLoader, in order.
+
+        Only set when shuffle=False and validation_split > 0. Returns None when
+        the full dataset is iterated without a split (all indices 0..len-1 in order).
+        """
+        return getattr(self, '_iter_indices', None)

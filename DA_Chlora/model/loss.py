@@ -458,6 +458,7 @@ class WeightedLossTerm:
     name: str
     weight: float = 1.0
     args: Optional[Mapping[str, Any]] = None
+    start_epoch: int = 1  # term is inactive before this epoch (1 = always active)
 
 
 class WeightedSumLoss(torch.nn.Module):
@@ -494,21 +495,31 @@ class WeightedSumLoss(torch.nn.Module):
                 raise ValueError(f"Loss term missing 'name': {t}")
             weight = float(t.get("weight", 1.0))
             args = t.get("args") or {}
-            parsed_terms.append(WeightedLossTerm(name=name, weight=weight, args=args))
+            start_epoch = int(t.get("start_epoch", 1))
+            parsed_terms.append(WeightedLossTerm(name=name, weight=weight, args=args, start_epoch=start_epoch))
 
-        self._terms: List[Tuple[str, float, Callable[..., torch.Tensor]]] = [
-            (term.name, term.weight, _resolve_loss_callable(term.name, term.args)) for term in parsed_terms
+        self._terms: List[Tuple[str, float, Callable[..., torch.Tensor], int]] = [
+            (term.name, term.weight, _resolve_loss_callable(term.name, term.args), term.start_epoch)
+            for term in parsed_terms
         ]
 
+        self._current_epoch: int = 1
         self.last_components: Dict[str, Dict[str, torch.Tensor]] = {}
+
+    def set_epoch(self, epoch: int) -> None:
+        """Call at the start of each epoch to activate/deactivate terms based on start_epoch."""
+        self._current_epoch = epoch
 
     def forward(self, output: torch.Tensor, target: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         total = None
         wsum = 0.0
         comps: Dict[str, Dict[str, torch.Tensor]] = {}
+        _zero = output.new_tensor(0.0)
 
-        for name, w, fn in self._terms:
-            if w == 0.0:
+        for name, w, fn, start_ep in self._terms:
+            if w == 0.0 or self._current_epoch < start_ep:
+                # Inactive term: record as zero so TensorBoard shows the activation moment
+                comps[name] = {"raw": _zero, "weighted": _zero, "contribution": _zero}
                 continue
             raw = fn(output, target, **kwargs)
             weighted = raw * w
@@ -517,7 +528,10 @@ class WeightedSumLoss(torch.nn.Module):
             wsum += w
 
         if total is None:
-            raise ValueError("Weighted loss has no non-zero terms")
+            raise ValueError(
+                f"Weighted loss has no active terms at epoch {self._current_epoch}. "
+                "Check that at least one loss term has start_epoch <= current epoch."
+            )
 
         if self.normalize:
             denom = total.new_tensor(wsum + self.eps)
